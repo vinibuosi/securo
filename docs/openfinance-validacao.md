@@ -73,7 +73,7 @@ cd backend
 .venv/bin/ruff check .
 .venv/bin/ty check
 .venv/bin/alembic heads
-POSTGRES_TEST_URL=<PostgreSQL-descartavel> .venv/bin/pytest -q -n 4 --dist loadfile -ra
+POSTGRES_TEST_URL='URL_DO_POSTGRESQL_DESCARTAVEL' .venv/bin/pytest -q -n 4 --dist loadfile -ra
 cd ../frontend
 npm test -- --maxWorkers=2 --testTimeout=20000
 npm run lint
@@ -88,9 +88,7 @@ viewer. As últimas correções foram revalidadas sobre o código já publicado.
 final detectou que a instalação editável do backend também precisava receber
 o segredo opcional de CA do proxy; esse passo foi corrigido, sem desabilitar TLS. O smoke do frontend também
 detectou a dependência das permissões locais do template nginx; o Dockerfile
-agora fixa sua leitura pelo usuário sem privilégios com `COPY --chmod=644`. O smoke do frontend também
-detectou a dependência das permissões locais do template nginx; o Dockerfile
-agora fixa a leitura pelo usuário sem privilégios com `COPY --chmod=644`.
+agora fixa sua leitura pelo usuário sem privilégios com `COPY --chmod=644`.
 
 Os dois casos pulados são os contratos de `GET /api/dashboard/monthly-trend`
 e `GET /api/reports/income-expenses`, porque essa varredura usa SQLite e depende
