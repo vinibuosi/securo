@@ -30,7 +30,7 @@ export function ReservedBalances({ account, display }: { account: Account; displ
           <option value="judicial_block">{t('openfinance.judicial_block', 'Bloqueio judicial')}</option>
         </select>
       </label>
-      {reserve.stale && <p role="status">{t('openfinance.stale', 'Último valor conhecido; atualização pendente.')}</p>}
+      {reserve.stale && <p role="status">{t('openfinance.staleReserve', 'Último valor conhecido; atualização pendente. Valor adicional no patrimônio: zero.')}</p>}
       <label className="text-sm">{t('openfinance.reconciliation', 'Reconciliação patrimonial')}{' '}
         <select aria-label={`${t('openfinance.reconciliation', 'Reconciliação patrimonial')}: ${reserve.name}`} value={reserve.investment_id ? 'investment' : reserve.reconciliation}
           disabled={!canWrite || mutation.isPending || !!reserve.investment_id}

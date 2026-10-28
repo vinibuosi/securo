@@ -10,6 +10,7 @@ export function PositionProvenance({ asset, display }: { asset: Asset; display: 
     <div><dt>{t('openfinance.maturityDate', 'Vencimento da aplicação')}</dt><dd>{asset.maturity_date ?? '—'}</dd></div>
     <div><dt>{t('openfinance.issuer', 'Emissor')}</dt><dd>{typeof meta.issuer === 'string' ? meta.issuer : '—'}</dd></div>
     <div><dt>{t('openfinance.taxes', 'Impostos informados')}</dt><dd>{meta.taxes == null ? '—' : display(Number(meta.taxes), asset.currency)} / {meta.taxes2 == null ? '—' : display(Number(meta.taxes2), asset.currency)}</dd></div>
+    {meta._securo_value_stale === true && <div>{t('openfinance.stale', 'Último valor conhecido; atualização pendente.')}</div>}
     {meta._securo_reconciliation_pending === true && <div className="sm:col-span-2 text-amber-700"><dt>{t('openfinance.reportedPending', 'Valor informado pela instituição, pendente de reconciliação')}</dt><dd>{display(Number(meta._securo_reported_value), asset.currency)}</dd></div>}
   </dl>
 }

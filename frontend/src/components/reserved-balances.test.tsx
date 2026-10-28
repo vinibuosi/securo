@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { screen } from '@testing-library/react'
-import { renderWithProviders } from '@/test/utils'
+import { renderWithProviders, t } from '@/test/utils'
 import { ReservedBalances } from './reserved-balances'
 import type { Account } from '@/types'
 vi.mock('@/contexts/workspace-context', () => ({ useWorkspace: () => ({ canWrite: true }) }))
@@ -11,7 +11,7 @@ describe('reserved balances', () => {
       { id: 'r', name: 'Viagem', amount: '8720.00', currency: 'BRL', classification: 'savings_pot', reconciliation: 'pending', stable_identity: true, updated_at: '2026-10-28' },
     ] } as Account} display={(n, c) => `${c} ${n}`} />)
     expect(screen.getByText('BRL 8720 · BRL')).toBeInTheDocument()
-    expect(screen.getByRole('combobox', { name: /Reconciliação/ })).toHaveValue('pending')
-    expect(screen.getByText(/não acrescentam patrimônio/)).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: `${t('openfinance.reconciliation')}: Viagem` })).toHaveValue('pending')
+    expect(screen.getByText(t('openfinance.reserveHelp'))).toBeInTheDocument()
   })
 })

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { accounts } from '@/lib/api'
+import { localDateString } from '@/lib/date-utils'
 import type { Account, StatementTransaction } from '@/types'
 
 export function CardStatements({ account, display }: { account: Account; display: (n: number, c: string) => string }) {
@@ -10,7 +11,7 @@ export function CardStatements({ account, display }: { account: Account; display
   const { data, isLoading, isError } = useQuery({ queryKey: ['accounts', account.id, 'billing-overview'], queryFn: () => accounts.billingOverview(account.id) })
   if (isLoading) return <p role="status">{t('common.loading')}</p>
   if (isError || !data) return <p role="alert">{t('openfinance.statementError', 'Não foi possível carregar as faturas.')}</p>
-  const today = new Date().toLocaleDateString('en-CA')
+  const today = localDateString(new Date())
   const selected = data.cycles.find(c => c.id === selectedId) ?? [...data.cycles].reverse().find(c => c.due_date >= today && !c.estimated) ?? data.cycles[0]
   const rows = (items: StatementTransaction[]) => <ul className="divide-y">{items.map(tx => <li className="py-2 text-sm" key={tx.id}>
     <span>{tx.date} · {tx.description}</span>{' '}
