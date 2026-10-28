@@ -18,7 +18,7 @@ RUN npm run build
 FROM nginxinc/nginx-unprivileged:alpine
 
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY default.conf.template /etc/nginx/templates/default.conf.template
+COPY --chmod=644 default.conf.template /etc/nginx/templates/default.conf.template
 
 # Have the image derive the DNS resolver from /etc/resolv.conf, so the same
 # image proxies to the backend on Docker, Podman, Kubernetes and Railway with
