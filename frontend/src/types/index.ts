@@ -163,7 +163,21 @@ export interface SyncResult extends BankConnection {
   sync_outcome: 'refreshed' | 'rate_limited'
 }
 
+export interface Reserve {
+  id: string
+  name: string
+  amount: string | null
+  currency: string
+  classification: string
+  reconciliation: string
+  updated_at: string
+  stale?: boolean
+  stable_identity: boolean
+  investment_id?: string | null
+}
+
 export interface Account {
+  reserves?: Reserve[]
   id: string
   user_id: string
   connection_id: string | null
@@ -879,6 +893,7 @@ export interface BudgetSuggestionResponse {
 }
 
 export interface Asset {
+  external_metadata?: Record<string, unknown> | null
   id: string
   user_id: string
   name: string

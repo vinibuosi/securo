@@ -141,6 +141,7 @@ def _asset_to_read(
     )
 
     return AssetRead(
+        external_metadata=asset.external_metadata,
         id=asset.id,
         user_id=asset.user_id,
         name=asset.name,
