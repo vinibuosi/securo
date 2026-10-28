@@ -311,3 +311,6 @@ React e bibliotecas correspondentes. Integração PostgreSQL usa
 A suíte de contratos inclui autenticação, papel viewer e IDs desconhecidos dos
 novos endpoints. Resultados reais e eventuais verificações não concluídas são
 registrados no relatório de entrega do PR.
+
+Resultados finais de testes, verificações de Docker e limitações:
+[relatório de validação](openfinance-validacao.md).
