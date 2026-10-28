@@ -320,6 +320,7 @@ async def reopen_account(
 
 class ReserveReconciliation(BaseModel):
     relationship: Literal["pending", "included", "outside", "investment"]
+    classification: Literal["savings_pot", "generic_reserve", "blocked_balance", "judicial_block"] | None = None
 
 
 @router.put("/{account_id}/reserves/{reserve_id}/reconciliation", status_code=204)
@@ -345,6 +346,9 @@ async def reconcile_reserve(
     ):
         raise HTTPException(422, "A fresh, identified reserve without an investment reference is required")
     reserve["reconciliation"] = data.relationship
+    if data.classification is not None:
+        reserve["classification"] = data.classification
+        reserve["classification_source"] = "user"
     metadata["reserves"] = rows
     account.provider_metadata = metadata
     await materialize(session, account)
@@ -382,12 +386,25 @@ async def reconcile_auto_investments(
     from app.models.account import Account
     siblings = list((await session.scalars(select(Account).where(
         Account.connection_id == account.connection_id, Account.id != account.id))).all())
-    ext_mirror = {a.external_id for a in assets if a.id in mirror}
+    ext_mirror = {a.external_id for a in assets if a.id in mirror and a.external_id}
     for sibling in siblings:
         prior = (sibling.provider_metadata or {}).get("auto_investment_ids", [])
         if ext_mirror.intersection(prior):
             raise HTTPException(422, "A position is already reconciled to another account")
     account.provider_metadata = {**(account.provider_metadata or {}),
         "auto_investment_ids": sorted(ext_mirror),
-        "independent_investment_ids": sorted(a.external_id for a in assets if a.id in independent)}
+        "independent_investment_ids": sorted(a.external_id for a in assets if a.id in independent and a.external_id)}
     await session.commit()
+
+
+@router.get("/{account_id}/billing-overview")
+async def billing_overview(
+    account_id: uuid.UUID,
+    ctx: WorkspaceContext = Depends(current_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    from app.services.card_statement_service import get_overview
+    account = await account_service.get_account(session, account_id, ctx.workspace.id)
+    if account is None or account.type != "credit_card":
+        raise HTTPException(404, "Credit card not found")
+    return await get_overview(session, account)

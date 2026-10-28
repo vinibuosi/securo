@@ -1,3 +1,4 @@
+import { CardStatements } from '@/components/card-statements'
 import { useState, useMemo } from 'react'
 import { getAccountName } from '@/lib/account-utils'
 import { useParams, Link } from 'react-router-dom'
@@ -363,6 +364,7 @@ export default function AccountDetailPage() {
     return cycle.start === filterFrom && cycle.end === filterTo
   }, [account?.statement_close_day, filterFrom, filterTo])
 
+  const [showStatementLedger, setShowStatementLedger] = useState(false)
   const [cycleSource, setCycleSource] = useState<{ account: typeof account; bills: typeof bills } | null>(null)
   if (!cycleSource || cycleSource.account !== account || cycleSource.bills !== bills) {
     setCycleSource({ account, bills })
@@ -925,8 +927,18 @@ export default function AccountDetailPage() {
     return <p className="text-muted-foreground">{t('accounts.notFound')}</p>
   }
 
+  if (account.type === 'credit_card' && account.provider === 'pluggy' && !showStatementLedger) {
+    return <div className="space-y-5">
+      <Link to="/accounts">{t('accounts.backToAccounts')}</Link>
+      <h1 className="text-2xl font-semibold">{getAccountName(account)}</h1>
+      <button className="border rounded p-2" onClick={() => setShowStatementLedger(true)}>{t('openfinance.auditLedger', 'Ver e editar lançamentos da conta')}</button>
+      <CardStatements account={account} display={(n, c) => mask(formatCurrency(n, c, locale))} />
+    </div>
+  }
+
   return (
     <div>
+      {account.type === 'credit_card' && account.provider === 'pluggy' && <button className="border rounded p-2 mb-4" onClick={() => setShowStatementLedger(false)}>{t('openfinance.monthlyStatements', 'Ver faturas mensais')}</button>}
       {/* Header */}
       <div className="mb-6 space-y-4">
         {/* Breadcrumb */}

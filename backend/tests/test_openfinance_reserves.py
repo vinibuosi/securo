@@ -15,7 +15,9 @@ def payload(amount="8720.00", **extra):
 
 @pytest.mark.parametrize("value", [None, True, "NaN", "Infinity", "-1", {}])
 def test_invalid_amount_never_becomes_money(value):
-    assert parse_reserves(payload(value), "BRL")[0]["amount"] is None
+    rows = parse_reserves(payload(value), "BRL")
+    assert rows is not None
+    assert rows[0]["amount"] is None
 
 
 async def test_reserve_reconciliation_and_idempotence(session, test_account):
@@ -56,6 +58,35 @@ def test_multiple_reserves_and_blocks_are_distinct():
         {"id": "b", "name": "Viagem", "type": "JUDICIAL_BLOCK", "balance": 200},
         {"name": "Cofrinho", "amount": 300},
     ]}, "BRL")
+    assert rows is not None
     assert len({r["id"] for r in rows}) == 3
     assert [r["classification"] for r in rows] == ["savings_pot", "judicial_block", "generic_reserve"]
     assert not rows[2]["stable_identity"]
+
+
+def test_documented_available_amounts_and_identification():
+    rows = parse_reserves({"reservedBalances": [
+        {"identification": "mp-goal", "name": "Cofrinho Viagem", "availableAmounts": [
+            {"amount": "8720.00", "currencyCode": "BRL", "remuneration": {"indexer": "CDI"}},
+            {"amount": "10.00", "currencyCode": "USD"},
+        ]},
+        {"identification": "mp-goal-2", "name": "Emergência", "availableAmounts": [{"amount": 100, "currencyCode": "BRL"}]},
+    ]}, "BRL")
+    assert rows is not None
+    assert [(r["id"], r["amount"], r["currency"]) for r in rows] == [
+        ("mp-goal:BRL", "8720.00", "BRL"), ("mp-goal:USD", "10.00", "USD"), ("mp-goal-2:BRL", "100", "BRL")]
+    assert all(r["stable_identity"] for r in rows)
+    assert rows[0]["raw"]["availableAmounts"][0]["remuneration"]["indexer"] == "CDI"
+
+
+async def test_reconciliation_api_requires_identity_and_workspace_access(client, auth_headers, session, test_account):
+    import uuid
+    await sync_metadata(session, test_account, {"reserves": parse_reserves(payload(), "BRL")})
+    await session.commit()
+    url = f"/api/accounts/{test_account.id}/reserves/pot-1/reconciliation"
+    response = await client.put(url, headers=auth_headers, json={"relationship": "outside", "classification": "savings_pot"})
+    assert response.status_code == 204
+    response = await client.put(f"/api/accounts/{uuid.uuid4()}/reserves/pot-1/reconciliation", headers=auth_headers, json={"relationship": "outside"})
+    assert response.status_code == 404
+    response = await client.put(url, json={"relationship": "outside"})
+    assert response.status_code == 401

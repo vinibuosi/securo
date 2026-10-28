@@ -31,13 +31,31 @@ def parse_reserves(bank: dict, currency: str) -> list[dict] | None:
     raw = bank.get("reservedBalances")
     if not isinstance(raw, list):
         return None
-    result = []
-    occurrences: dict[str, int] = {}
+    expanded = []
     for entry in raw:
         if not isinstance(entry, dict):
             continue
+        amounts = entry.get("availableAmounts")
+        if not isinstance(amounts, list) or not amounts:
+            expanded.append(entry)
+            continue
+        by_currency: dict[str, list] = {}
+        for available in amounts:
+            if isinstance(available, dict):
+                code = str(available.get("currencyCode") or currency)
+                by_currency.setdefault(code, []).append(available)
+        for code, available in by_currency.items():
+            values = [money(a.get("amount")) for a in available]
+            total = sum(values, Decimal(0)) if all(v is not None for v in values) else None
+            native = entry.get("identification") or entry.get("id") or entry.get("reservedBalanceId")
+            expanded.append({**entry, "id": f"{native}:{code}" if native is not None else None,
+                             "balance": str(total) if total is not None else None,
+                             "currencyCode": code, "_original": entry})
+    result = []
+    occurrences: dict[str, int] = {}
+    for entry in expanded:
         name = str(entry.get("name") or entry.get("description") or entry.get("type") or "Reserva")[:255]
-        native_id = entry.get("id") or entry.get("reservedBalanceId")
+        native_id = entry.get("id") or entry.get("reservedBalanceId") or entry.get("identification")
         kind = str(entry.get("type") or "").upper()
         # A name by itself never proves that a generic block is a savings pot.
         classification = {
@@ -46,7 +64,7 @@ def parse_reserves(bank: dict, currency: str) -> list[dict] | None:
             "JUDICIAL_BLOCK": "judicial_block", "BLOCKED": "blocked_balance",
         }.get(kind, "generic_reserve")
         base = str(native_id) if native_id is not None else hashlib.sha256(
-            f"{kind}:{name}".encode()
+            f"{kind}:{name}:{entry.get('currencyCode') or currency}".encode()
         ).hexdigest()
         occurrence = occurrences.get(base, 0)
         occurrences[base] = occurrence + 1
@@ -58,7 +76,7 @@ def parse_reserves(bank: dict, currency: str) -> list[dict] | None:
             "classification": classification, "reconciliation": "pending",
             "stable_identity": native_id is not None and occurrence == 0,
             "investment_id": str(entry["investmentId"]) if entry.get("investmentId") else None,
-            "raw": entry,
+            "raw": entry.get("_original", entry),
         })
     # Duplicate provider ids are ambiguous, including the first occurrence.
     for row in result:
@@ -79,10 +97,16 @@ def merge_metadata(previous: dict | None, incoming: dict) -> dict:
         rows.append({**prior, **row,
                      "amount": row.get("amount") if valid else prior.get("amount"),
                      "reconciliation": prior.get("reconciliation", "pending"),
+                     "classification": prior.get("classification", row["classification"]) if prior.get("classification_source") == "user" else row["classification"],
                      "updated_at": now if valid else prior.get("updated_at", now),
                      "stale": not valid})
     # Even an empty list cannot prove redemption: require an explicit zero.
     rows.extend({**row, "stale": True} for row in old.values())
+    if not rows and incoming.get("has_reserved_balance") is True:
+        rows.append({"id": "unavailable", "name": "Reserva sem detalhamento",
+                     "amount": None, "currency": incoming.get("currency", "BRL"),
+                     "classification": "generic_reserve", "reconciliation": "pending",
+                     "stable_identity": False, "updated_at": now, "stale": True})
     merged["reserves"] = rows
     return merged
 
@@ -90,7 +114,7 @@ def merge_metadata(previous: dict | None, incoming: dict) -> dict:
 async def materialize(session: AsyncSession, account: Account) -> None:
     metadata = account.provider_metadata or {}
     for reserve in metadata.get("reserves", []):
-        key = "reserve:" + hashlib.sha256(f'{account.id}:{reserve["id"]}'.encode()).hexdigest()
+        key = "reserve:" + hashlib.sha256(f'{account.stable_external_id or account.id}:{reserve["id"]}'.encode()).hexdigest()
         asset = await session.scalar(select(Asset).where(
             Asset.workspace_id == account.workspace_id, Asset.source == "pluggy_reserve",
             Asset.external_id == key,

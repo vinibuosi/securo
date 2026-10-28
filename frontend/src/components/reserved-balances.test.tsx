@@ -11,7 +11,7 @@ describe('reserved balances', () => {
       { id: 'r', name: 'Viagem', amount: '8720.00', currency: 'BRL', classification: 'savings_pot', reconciliation: 'pending', stable_identity: true, updated_at: '2026-10-28' },
     ] } as Account} display={(n, c) => `${c} ${n}`} />)
     expect(screen.getByText('BRL 8720 · BRL')).toBeInTheDocument()
-    expect(screen.getByRole('combobox')).toHaveValue('pending')
+    expect(screen.getByRole('combobox', { name: /Reconciliação/ })).toHaveValue('pending')
     expect(screen.getByText(/não acrescentam patrimônio/)).toBeInTheDocument()
   })
 })

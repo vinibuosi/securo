@@ -391,5 +391,5 @@ async def consolidate_positions(session, workspace_id, user_id, data):
     for position in positions:
         position.group_id = group.id
     await session.commit()
-    return _group_to_read(group, len(positions), Decimal(0), Decimal(0),
-                          await _institution_name_for(session, group))
+    count, value, primary = await _rollup(session, group, await _primary_currency_for(session, user_id))
+    return _group_to_read(group, count, value, primary, await _institution_name_for(session, group))

@@ -1,3 +1,4 @@
+import { PositionProvenance } from '@/components/position-provenance'
 import { ConsolidatePositions } from '@/components/consolidate-positions'
 import { positionGroup } from '@/lib/position-group'
 import { useState, useMemo, useEffect, useRef } from 'react'
@@ -889,6 +890,7 @@ export default function AssetsPage() {
 
         {isExpanded && (
           <>
+          <PositionProvenance asset={asset} display={(n, c) => mask(formatCurrency(n, c, locale))} />
           {LOAN_COLLATERAL_TYPES.includes(asset.type) && (
             <PropertyEquitySummary
               asset={asset}

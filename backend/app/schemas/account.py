@@ -88,6 +88,7 @@ class AccountRead(AccountBase):
     # available, so balance_primary is left unset rather than a 1:1 guess.
     fx_fallback: bool = False
     credit_limit: Optional[float] = None
+    provider: Optional[str] = None
     reserves: list[dict] = []
     automatically_invested_balance: Optional[float] = None
     available_credit: Optional[float] = None

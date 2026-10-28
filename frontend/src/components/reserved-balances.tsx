@@ -10,7 +10,7 @@ export function ReservedBalances({ account, display }: { account: Account; displ
   const { canWrite } = useWorkspace()
   const client = useQueryClient()
   const mutation = useMutation({
-    mutationFn: ({ id, relationship }: { id: string; relationship: string }) => accounts.reconcileReserve(account.id, id, relationship),
+    mutationFn: ({ id, relationship, classification }: { id: string; relationship: string; classification?: string }) => accounts.reconcileReserve(account.id, id, relationship, classification),
     onSuccess: () => client.invalidateQueries(),
     onError: () => toast.error(t('openfinance.reconciliationError', 'Não foi possível salvar a reconciliação.')),
   })
@@ -22,6 +22,14 @@ export function ReservedBalances({ account, display }: { account: Account; displ
       <h3>{reserve.name} · {account.institution_name ?? account.name}</h3>
       <p>{reserve.amount == null ? t('openfinance.missingValue', 'Valor indisponível') : display(Number(reserve.amount), reserve.currency)} · {reserve.currency}</p>
       <p className="text-xs text-muted-foreground">{t(`openfinance.${reserve.classification}`, reserve.classification)} · Pluggy /accounts · {reserve.updated_at}</p>
+      <label className="text-sm">{t('openfinance.classification', 'Classificação')}{' '}
+        <select value={reserve.classification} disabled={!canWrite || mutation.isPending} onChange={e => mutation.mutate({ id: reserve.id, relationship: reserve.reconciliation, classification: e.target.value })}>
+          <option value="generic_reserve">{t('openfinance.generic_reserve', 'Reserva genérica')}</option>
+          <option value="savings_pot">{t('openfinance.savings_pot', 'Cofrinho')}</option>
+          <option value="blocked_balance">{t('openfinance.blocked_balance', 'Saldo bloqueado')}</option>
+          <option value="judicial_block">{t('openfinance.judicial_block', 'Bloqueio judicial')}</option>
+        </select>
+      </label>
       {reserve.stale && <p role="status">{t('openfinance.stale', 'Último valor conhecido; atualização pendente.')}</p>}
       <label className="text-sm">{t('openfinance.reconciliation', 'Reconciliação patrimonial')}{' '}
         <select aria-label={`${t('openfinance.reconciliation', 'Reconciliação patrimonial')}: ${reserve.name}`} value={reserve.investment_id ? 'investment' : reserve.reconciliation}

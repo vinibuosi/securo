@@ -21,6 +21,7 @@ import type {
   AccountRunningBalancePoint,
   Collection,
   CreditCardBill,
+  BillingOverview,
   LoanBalanceAdjustment,
   LoanBalanceUpdate,
   LoanSchedule,
@@ -487,11 +488,15 @@ export const connections = {
 
 // Accounts
 export const accounts = {
+  billingOverview: async (id: string): Promise<BillingOverview> => {
+    const { data } = await api.get(`/accounts/${id}/billing-overview`)
+    return data
+  },
   reconcileAutoInvestments: async (accountId: string, mirror_ids: string[], independent_ids: string[]): Promise<void> => {
     await api.put(`/accounts/${accountId}/auto-investments`, { mirror_ids, independent_ids })
   },
-  reconcileReserve: async (accountId: string, reserveId: string, relationship: string): Promise<void> => {
-    await api.put(`/accounts/${accountId}/reserves/${encodeURIComponent(reserveId)}/reconciliation`, { relationship })
+  reconcileReserve: async (accountId: string, reserveId: string, relationship: string, classification?: string): Promise<void> => {
+    await api.put(`/accounts/${accountId}/reserves/${encodeURIComponent(reserveId)}/reconciliation`, { relationship, classification })
   },
   list: async (includeClosed = false): Promise<Account[]> => {
     const { data } = await api.get('/accounts', { params: { include_closed: includeClosed } })

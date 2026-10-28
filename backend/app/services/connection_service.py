@@ -442,6 +442,9 @@ async def _prepare_auto_invested(session, connection, holdings, accounts_data):
         metadata.pop("_securo_auto_invested", None)
         explicitly_auto = metadata.get("isAutomaticallyInvested") is True and holding.account_external_id in candidates
         owner = mirrors.get(holding.external_id) or (holding.account_external_id if explicitly_auto else None)
+        metadata.pop("_securo_independent", None)
+        if holding.external_id in independent:
+            metadata["_securo_independent"] = True
         if owner:
             holding.account_external_id = owner
             metadata["_securo_auto_invested"] = True
@@ -1446,7 +1449,7 @@ async def handle_oauth_callback(
                         and synced_dup.effective_bill_date is None
                     ):
                         bill = bills_by_external_id.get(txn_data.bill_external_id)
-                        if bill is not None and synced_dup.bill_id != bill.id:
+                        if bill is not None:
                             synced_dup.bill_id = bill.id
                             apply_effective_date(
                                 synced_dup, account, bill_due_date=bill.due_date
@@ -1767,9 +1770,14 @@ def _merge_sync_metadata(
         if not transaction.raw_data:
             transaction.raw_data = txn_data.raw_data
         elif isinstance(transaction.raw_data, dict) and isinstance(txn_data.raw_data, dict):
-            merged = {**transaction.raw_data, **txn_data.raw_data}
+            original = transaction.raw_data.get("_securo_original_payload") or dict(transaction.raw_data)
+            merged = {**transaction.raw_data, **txn_data.raw_data, "_securo_original_payload": original}
             if merged != transaction.raw_data:
                 transaction.raw_data = merged
+    for field in ("installment_number", "total_installments", "installment_total_amount", "installment_purchase_date"):
+        value = getattr(txn_data, field, None)
+        if value is not None:
+            setattr(transaction, field, value)
     if transaction.original_description is None:
         transaction.original_description = txn_data.description
     if txn_data.payee and not transaction.payee:
@@ -1824,7 +1832,19 @@ async def _find_synced_duplicate(
         for candidate in result.scalars():
             if candidate.external_id and candidate.external_id.startswith("bill_charge:"):
                 continue
-            return candidate
+            from app.services.card_statement_service import purchase_id
+            left = purchase_id(candidate)
+            raw = txn_data.raw_data or {}
+            right_meta = raw.get("creditCardMetadata") or {}
+            right = right_meta.get("purchaseId") or right_meta.get("originalTransactionId")
+            if left and right and str(left) == str(right):
+                return candidate
+            if candidate.external_id in incoming_external_ids:
+                continue
+            # Re-keyed pending/posted lot remains the existing fallback, but
+            # simultaneous distinct purchases are never merged by amount.
+            if candidate.status != txn_data.status:
+                return candidate
 
     # Path 2: pending↔posted twin on the same account/date/amount/type. The
     # status differential is the load-bearing signal — without it we'd risk
@@ -2087,7 +2107,8 @@ async def _sync_bill_finance_charges(
     # date = close (when the bank applied the charge); effective_date stays
     # at bill.due_date so accrual-mode aggregations bucket the same as
     # regular CC purchases for this bill.
-    charge_date = _compute_bill_close_date(bill.due_date, account.statement_close_day)
+    from app.services.card_statement_service import closing_date
+    charge_date = closing_date(bill) or _compute_bill_close_date(bill.due_date, account.statement_close_day)
 
     desired_external_ids: set[str] = set()
     for raw in raw_charges:
@@ -2126,7 +2147,7 @@ async def _sync_bill_finance_charges(
             existing.date = charge_date
             existing.effective_date = bill.due_date
             existing.bill_id = bill.id
-            existing.raw_data = raw
+            existing.raw_data = {**raw, **({"_securo_duplicate_charge": True} if (existing.raw_data or {}).get("_securo_duplicate_charge") else {})}
         else:
             tx = Transaction(
                 user_id=user_id,
@@ -2182,16 +2203,19 @@ async def _sync_credit_card_bills(
     if account.type != "credit_card":
         return {}
 
+    existing = list((await session.scalars(select(CreditCardBill).where(
+        CreditCardBill.account_id == account.id))).all())
+    stored = {b.external_id: b for b in existing}
     try:
         bills_data = await provider.get_bills(credentials, account.external_id)
     except Exception as e:  # noqa: BLE001 — provider failures must not fail sync
         logger.info(
             "Skipping credit-card bills sync for account %s: %s", account.id, e
         )
-        return {}
+        return stored
 
     if not bills_data:
-        return {}
+        return stored
 
     existing = (
         await session.execute(
@@ -2220,9 +2244,30 @@ async def _sync_credit_card_bills(
             bill.total_amount = bd.total_amount
             bill.currency = bd.currency
             bill.minimum_payment = bd.minimum_payment
-            bill.raw_data = bd.raw_data
+            bill.raw_data = {**(bill.raw_data or {}), **(bd.raw_data or {})}
 
     await session.flush()
+
+    # A due-date correction applies even to old transactions outside the
+    # incremental fetch window. Manual overrides remain authoritative.
+    for bill in by_external_id.values():
+        linked = list((await session.scalars(select(Transaction).where(
+            Transaction.account_id == account.id, Transaction.bill_id == bill.id,
+            Transaction.effective_bill_date.is_(None),
+        ))).all())
+        for tx in linked:
+            apply_effective_date(tx, account, bill_due_date=bill.due_date)
+
+    unlinked = list((await session.scalars(select(Transaction).where(
+        Transaction.account_id == account.id, Transaction.bill_id.is_(None),
+        Transaction.effective_bill_date.is_(None),
+    ))).all())
+    for tx in unlinked:
+        raw_id = ((tx.raw_data or {}).get("creditCardMetadata") or {}).get("billId")
+        found = by_external_id.get(str(raw_id)) if raw_id else None
+        if found:
+            tx.bill_id = found.id
+            apply_effective_date(tx, account, bill_due_date=found.due_date)
 
     # Materialize finance charges (IOF, juros, multa, etc.) as transactions
     # linked to each bill so the cycle sum reconciles to bill.total_amount.
@@ -2231,7 +2276,7 @@ async def _sync_credit_card_bills(
         if bill is None:
             continue
         raw_charges = (bd.raw_data or {}).get("financeCharges")
-        if isinstance(raw_charges, list) and raw_charges:
+        if isinstance(raw_charges, list):
             await _sync_bill_finance_charges(
                 session, user_id, account, bill, raw_charges,
             )
@@ -2505,7 +2550,7 @@ async def sync_connection(
             # external_id below handles overlap cheaply.
             since = (
                 connection.last_sync_at.date() - timedelta(days=14)
-                if connection.last_sync_at
+                if connection.last_sync_at and not (connection.provider == "pluggy" and is_cc)
                 else None
             )
             transactions_data = await provider.get_transactions(
@@ -2546,7 +2591,12 @@ async def sync_connection(
                     # a re-sync can't revive a transaction the user hid.
                     if existing_tx.is_ignored:
                         continue
+                    amount_changed = existing_tx.amount != txn_data.amount or existing_tx.type != txn_data.type
                     _merge_sync_metadata(existing_tx, txn_data)
+                    if existing_tx.source == "sync" and amount_changed:
+                        existing_tx.amount = txn_data.amount
+                        existing_tx.type = txn_data.type
+                        await stamp_primary_amount(session, user_id, existing_tx)
                     if existing_tx.status == "pending" and txn_data.status == "posted":
                         existing_tx.status = "posted"
                     # Self-heal bill linkage: a tx that pre-dates the bills
@@ -2564,7 +2614,7 @@ async def sync_connection(
                         and existing_tx.effective_bill_date is None
                     ):
                         bill = bills_by_external_id.get(txn_data.bill_external_id)
-                        if bill is not None and existing_tx.bill_id != bill.id:
+                        if bill is not None:
                             existing_tx.bill_id = bill.id
                             apply_effective_date(
                                 existing_tx, account, bill_due_date=bill.due_date
@@ -2606,7 +2656,7 @@ async def sync_connection(
                             and synced_dup.effective_bill_date is None
                         ):
                             bill = bills_by_external_id.get(txn_data.bill_external_id)
-                            if bill is not None and synced_dup.bill_id != bill.id:
+                            if bill is not None:
                                 synced_dup.bill_id = bill.id
                                 apply_effective_date(
                                     synced_dup, account, bill_due_date=bill.due_date
@@ -2771,6 +2821,8 @@ async def sync_connection(
 
             # Reconcile the opening balance after any new transactions land so
             # SUM(all txs) keeps matching account.balance from the provider.
+            from app.services.card_charge_reconciliation import reconcile_charges
+            await reconcile_charges(session, account)
             await sync_opening_balance_for_connected_account(session, account)
 
         # Detect transfer pairs among newly synced transactions
