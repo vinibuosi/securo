@@ -5,10 +5,8 @@ number and stay green until they are both on main, where `alembic upgrade
 head` then refuses to run. These build that situation on disk and assert the
 guard reports it.
 
-Every case is synthetic, under tmp_path. The repository's own chain is checked
-by the Migration Chain CI job, not from here: a real clash belongs to that job
-alone, so it is not also reported as a backend test failure in a suite that has
-nothing to do with it.
+Synthetic cases exercise the guard; a real-tree assertion also protects the
+backend suite from regressions in the committed migration graph.
 """
 
 import importlib.util
@@ -123,3 +121,7 @@ def test_empty_directory_is_reported(tmp_path: Path):
     empty.mkdir()
 
     assert any("no migration files found" in p for p in check(empty))
+
+
+def test_repository_migration_chain_is_valid():
+    assert check(check_migration_chain.VERSIONS_DIR) == []
