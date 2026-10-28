@@ -364,3 +364,32 @@ async def _unique_default_name(
     while f"{base} {i}" in taken:
         i += 1
     return f"{base} {i}"
+
+
+async def consolidate_positions(session, workspace_id, user_id, data):
+    """Atomic presentation-only grouping. No Asset/AssetValue is created.
+
+    The user selects membership explicitly; names, issuer, rate and amount are
+    never identity evidence. A manual wallet survives provider resyncs.
+    """
+    ids = set(data.asset_ids)
+    positions = list((await session.scalars(select(Asset).where(
+        Asset.workspace_id == workspace_id, Asset.id.in_(ids),
+        Asset.source == "pluggy", Asset.type == "investment",
+        Asset.is_archived.is_(False), Asset.sell_date.is_(None),
+    ))).all())
+    if len(positions) != len(ids):
+        raise HTTPException(404, "Position not found")
+    if len({(a.connection_id, a.currency) for a in positions}) != 1:
+        raise HTTPException(422, "Select positions of one connection and currency")
+    group = AssetGroup(user_id=user_id, workspace_id=workspace_id, name=data.name.strip(),
+                       source="manual", connection_id=positions[0].connection_id)
+    if not group.name:
+        raise HTTPException(422, "A name is required")
+    session.add(group)
+    await session.flush()
+    for position in positions:
+        position.group_id = group.id
+    await session.commit()
+    return _group_to_read(group, len(positions), Decimal(0), Decimal(0),
+                          await _institution_name_for(session, group))

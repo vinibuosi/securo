@@ -248,7 +248,7 @@ def _sync_assets_enabled(settings: Optional[dict]) -> bool:
     return (settings or {}).get("sync_assets", True) is not False
 
 
-def _account_balance(acc_data: AccountData, deducted: set[str]) -> Decimal:
+def _account_balance(acc_data: AccountData, deducted: dict[str, Decimal]) -> Decimal:
     """Balance to store for a synced account.
 
     Some banks auto-apply idle cash to an investment and the provider reports
@@ -260,7 +260,7 @@ def _account_balance(acc_data: AccountData, deducted: set[str]) -> Decimal:
     """
     if acc_data.external_id not in deducted or acc_data.auto_invested_balance <= 0:
         return acc_data.balance
-    return acc_data.balance - acc_data.auto_invested_balance
+    return acc_data.balance - deducted[acc_data.external_id]
 
 
 async def _fetch_holdings(
@@ -289,6 +289,8 @@ class _CountedHolding:
     account_external_id: Optional[str]  # None: not attributable to an account
     value: Decimal
     currency: str
+    external_id: Optional[str] = None
+    auto_invested: bool = False
 
 
 def _provider_sell_date_reverts(asset: Asset) -> bool:
@@ -356,7 +358,8 @@ async def _counted_holdings(
             ).all()
         }
         return [
-            _CountedHolding(h.account_external_id, h.current_value, h.currency)
+            _CountedHolding(h.account_external_id, h.current_value, h.currency, h.external_id,
+                            bool((h.metadata or {}).get("_securo_auto_invested")))
             for h in live
             if _stays_counted(existing_by_external.get(h.external_id), connection.id)
         ]
@@ -370,7 +373,7 @@ async def _counted_holdings(
     )
     rows = (
         await session.execute(
-            select(AssetGroup.external_id, latest_value, Asset.currency)
+            select(AssetGroup.external_id, latest_value, Asset.currency, Asset.external_id, Asset.external_metadata)
             .select_from(Asset)
             .outerjoin(AssetGroup, Asset.group_id == AssetGroup.id)
             .where(
@@ -390,69 +393,67 @@ async def _counted_holdings(
     }
     return [
         _CountedHolding(
-            account_by_wallet.get(key) if key else None,
+            (metadata or {}).get("_securo_auto_invested_account") or (account_by_wallet.get(key) if key else None),
             Decimal(value) if value is not None else Decimal(0),
-            currency,
+            currency, ext_id, bool((metadata or {}).get("_securo_auto_invested")),
         )
-        for key, value, currency in rows
+        for key, value, currency, ext_id, metadata in rows
     ]
-
-
-# How far an unattributed holding's value may sit from an account's
-# auto-invested balance and still count as the same money: the larger of
-# 1% and 1.00 in the account currency. The two figures come from different
-# provider endpoints and can drift by a day's yield.
-_AUTO_INVEST_MATCH_RELATIVE = Decimal("0.01")
-_AUTO_INVEST_MATCH_ABSOLUTE = Decimal("1")
-
-
-def _mirrors_auto_invested(holding: _CountedHolding, acc: AccountData) -> bool:
-    """Whether an unattributed holding looks like this account's auto-invested money."""
-    if holding.currency != acc.currency:
-        return False
-    tolerance = max(
-        acc.auto_invested_balance * _AUTO_INVEST_MATCH_RELATIVE,
-        _AUTO_INVEST_MATCH_ABSOLUTE,
-    )
-    return abs(holding.value - acc.auto_invested_balance) <= tolerance
 
 
 def _auto_invested_deductions(
     accounts_data: list[AccountData], counted: list[_CountedHolding]
-) -> set[str]:
-    """External ids of the accounts whose auto-invested portion is deducted.
+) -> dict[str, Decimal]:
+    """Only confirmed identities permit deduction; sum lots, cap at bank portion."""
+    result = {}
+    for acc in accounts_data:
+        if acc.auto_invested_balance <= 0:
+            continue
+        confirmed = sum((h.value for h in counted if h.auto_invested
+                         and h.account_external_id == acc.external_id
+                         and h.currency == acc.currency and h.value > 0), Decimal(0))
+        if confirmed:
+            result[acc.external_id] = min(acc.auto_invested_balance, confirmed)
+    return result
 
-    The deduction is per account: an account loses its auto-invested portion
-    only when a counted holding is attributed to that same account, never
-    because some other account of the connection has one.
 
-    Holdings without an owning account (Pluggy's investments payload carries
-    the item but no account id, so this is the normal case there) cannot say
-    which account they came from, or whether they are the auto-invested
-    money at all (the same item can hold unrelated investments). Deducting
-    on a guess would understate net worth, so an unattributed holding only
-    allows the deduction when both hold:
+async def _prepare_auto_invested(session, connection, holdings, accounts_data):
+    """Quarantine ambiguous overlap; user confirmations survive daily sync.
 
-    - exactly one account of the connection reports an auto-invested
-      balance, so it is the only account the holding can mirror;
-    - the holding's value matches that balance, in the same currency,
-      within the tolerance above (in the case of issue #843 the two figures
-      were identical).
-
-    Otherwise the account keeps the full reported balance, which can count
-    the money twice but never drops it.
+    Account ownership alone does not prove automatically-invested identity.
+    Equality of values never participates. Reported values remain in metadata.
     """
-    candidates = [acc for acc in accounts_data if acc.auto_invested_balance > 0]
-    owners = {h.account_external_id for h in counted}
-    deducted = {acc.external_id for acc in candidates if acc.external_id in owners}
-    if len(candidates) == 1:
-        only = candidates[0]
-        if any(
-            h.account_external_id is None and _mirrors_auto_invested(h, only)
-            for h in counted
+    if connection.provider != "pluggy" or holdings is None:
+        return
+    accounts = list((await session.scalars(select(Account).where(
+        Account.connection_id == connection.id))).all())
+    mirrors = {}
+    independent = set()
+    for acc in accounts:
+        metadata = acc.provider_metadata or {}
+        for key in metadata.get("auto_investment_ids", []):
+            mirrors[key] = acc.external_id
+        independent.update(metadata.get("independent_investment_ids", []))
+    candidates = {a.external_id for a in accounts_data if a.auto_invested_balance > 0}
+    for holding in holdings:
+        metadata = dict(holding.metadata or {})
+        if metadata.pop("_securo_reconciliation_pending", False):
+            holding.current_value = Decimal(metadata.pop("_securo_reported_value", str(holding.current_value)))
+        metadata.pop("_securo_auto_invested", None)
+        explicitly_auto = metadata.get("isAutomaticallyInvested") is True and holding.account_external_id in candidates
+        owner = mirrors.get(holding.external_id) or (holding.account_external_id if explicitly_auto else None)
+        if owner:
+            holding.account_external_id = owner
+            metadata["_securo_auto_invested"] = True
+            metadata["_securo_auto_invested_account"] = owner
+        elif holding.external_id not in independent and (
+            holding.account_external_id is None or holding.account_external_id in candidates
         ):
-            deducted.add(only.external_id)
-    return deducted
+            metadata["_securo_reported_value"] = str(holding.current_value)
+            metadata["_securo_reconciliation_pending"] = True
+            metadata["_securo_return_incomplete"] = True
+            holding.current_value = Decimal(0)
+        holding.metadata = metadata
 
 
 async def _resolve_auto_invested_deductions(
@@ -460,14 +461,15 @@ async def _resolve_auto_invested_deductions(
     connection: BankConnection,
     holdings: Optional[list[HoldingData]],
     accounts_data: list[AccountData],
-) -> set[str]:
+) -> dict[str, Decimal]:
     """Accounts whose auto-invested portion leaves the stored balance.
 
     Skips the database lookup when no account reports an auto-invested
     portion, which is every connection but the affected ones.
     """
     if not any(acc.auto_invested_balance > 0 for acc in accounts_data):
-        return set()
+        return {}
+    await _prepare_auto_invested(session, connection, holdings, accounts_data)
     counted = await _counted_holdings(session, connection, holdings, accounts_data)
     return _auto_invested_deductions(accounts_data, counted)
 
@@ -567,7 +569,8 @@ async def _sync_holdings(
         )
 
     async def _wallet_for(holding: HoldingData) -> AssetGroup:
-        key = holding.account_external_id
+        box = (holding.metadata or {}).get("_securo_savings_group")
+        key = f"caixinha:{box['id']}" if box else holding.account_external_id
         if key not in groups_by_key:
             # The owning account's institution backs the wallet's
             # "Synced from …" subtitle (issue #345).
@@ -583,7 +586,8 @@ async def _sync_holdings(
             )
             wallet_key = _wallet_external_id(connection.external_id, key)
             default_name = (
-                _clean_institution_name(holding.account_name)
+                (_clean_institution_name(box.get("name")) if box else None)
+                or _clean_institution_name(holding.account_name)
                 or connection.institution_name
             )
             # The first claim on a wallet key adopts the wallet these
@@ -847,7 +851,7 @@ async def _sync_holdings(
         # Seed a historical value at purchase_date so users get a real
         # evolution curve from day one — not just today's snapshot.
         # Idempotent: skips if any AssetValue already exists at that date.
-        if holding.purchase_date and holding.purchase_price is not None:
+        if holding.purchase_date and holding.purchase_price is not None and not (holding.metadata or {}).get("_securo_reconciliation_pending"):
             await _ensure_historical_seed(
                 session, asset, holding.purchase_date, holding.purchase_price
             )

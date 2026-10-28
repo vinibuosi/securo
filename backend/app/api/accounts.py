@@ -349,3 +349,45 @@ async def reconcile_reserve(
     account.provider_metadata = metadata
     await materialize(session, account)
     await session.commit()
+
+
+class AutoInvestmentReconciliation(BaseModel):
+    mirror_ids: list[uuid.UUID]
+    independent_ids: list[uuid.UUID]
+
+
+@router.put("/{account_id}/auto-investments", status_code=204)
+async def reconcile_auto_investments(
+    account_id: uuid.UUID,
+    data: AutoInvestmentReconciliation,
+    ctx: WorkspaceContext = Depends(current_writable_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    from sqlalchemy import select
+    from app.models.asset import Asset
+    account = await account_service.get_account(session, account_id, ctx.workspace.id)
+    if account is None or not account.connection_id:
+        raise HTTPException(404, "Connected account not found")
+    mirror = set(data.mirror_ids)
+    independent = set(data.independent_ids)
+    if mirror & independent or len(mirror | independent) > 500:
+        raise HTTPException(422, "Invalid reconciliation selection")
+    assets = list((await session.scalars(select(Asset).where(
+        Asset.workspace_id == ctx.workspace.id, Asset.connection_id == account.connection_id,
+        Asset.source == "pluggy", Asset.id.in_(mirror | independent),
+        Asset.currency == account.currency,
+    ))).all())
+    if len(assets) != len(mirror | independent):
+        raise HTTPException(404, "Position not found")
+    from app.models.account import Account
+    siblings = list((await session.scalars(select(Account).where(
+        Account.connection_id == account.connection_id, Account.id != account.id))).all())
+    ext_mirror = {a.external_id for a in assets if a.id in mirror}
+    for sibling in siblings:
+        prior = (sibling.provider_metadata or {}).get("auto_investment_ids", [])
+        if ext_mirror.intersection(prior):
+            raise HTTPException(422, "A position is already reconciled to another account")
+    account.provider_metadata = {**(account.provider_metadata or {}),
+        "auto_investment_ids": sorted(ext_mirror),
+        "independent_investment_ids": sorted(a.external_id for a in assets if a.id in independent)}
+    await session.commit()

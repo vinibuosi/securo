@@ -293,11 +293,24 @@ def _build_holding_data(inv: dict) -> HoldingData:
     pluggy_status = (inv.get("status") or "").upper()
     pluggy_type = (inv.get("type") or "").upper()
 
-    purchase_date: Optional[date] = None
-    if pluggy_type in _ISSUE_DATE_IS_PURCHASE_DATE:
+    purchase_date: Optional[date] = _date_or_none(inv.get("purchaseDate"))
+    if purchase_date is None and pluggy_type in _ISSUE_DATE_IS_PURCHASE_DATE:
         purchase_date = _date_or_none(inv.get("issueDate"))
 
     metadata = {k: v for k, v in inv.items() if k not in _HOLDING_PROMOTED_KEYS}
+    # Only a semantically explicit savings-container id can group positions.
+    # Most Pluggy connectors do not supply this: leave them for manual grouping.
+    details = inv.get("metadata") if isinstance(inv.get("metadata"), dict) else {}
+    box_id = inv.get("caixinhaId") or details.get("caixinhaId")
+    if isinstance(box_id, (str, int)) and str(box_id):
+        metadata["_securo_savings_group"] = {
+            "id": str(box_id),
+            "name": inv.get("caixinhaName") or details.get("caixinhaName") or "Caixinha",
+        }
+    metadata["_securo_return_incomplete"] = (
+        inv.get("amountOriginal") is None
+        or str(inv.get("status", "")).upper() in {"PARTIAL_WITHDRAWAL", "TOTAL_WITHDRAWAL"}
+    )
 
     # A fully withdrawn position reports zero (or absent) balance and
     # quantity. When the status is TOTAL_WITHDRAWAL but the same payload
@@ -318,6 +331,7 @@ def _build_holding_data(inv: dict) -> HoldingData:
         purchase_price=_decimal_or_none(inv.get("amountOriginal")),
         purchase_date=purchase_date,
         isin=inv.get("isin") or None,
+        account_external_id=str(inv["accountId"]) if inv.get("accountId") else None,
         maturity_date=_date_or_none(inv.get("dueDate")),
         is_withdrawn=is_withdrawn,
         metadata=metadata or None,
@@ -423,6 +437,7 @@ def _build_account_data(acc: dict, type_mapper) -> AccountData:
     provider_metadata = {
         "reserves": parse_reserves(bank, acc.get("currencyCode") or "BRL"),
         "has_reserved_balance": bank.get("hasReservedBalance"),
+        "automatically_invested_balance": str(_auto_invested_portion(acc)),
         "available_credit_limit": str(credit_data["availableCreditLimit"])
         if credit_data.get("availableCreditLimit") is not None else None,
         "balance_due_date": credit_data.get("balanceDueDate"),

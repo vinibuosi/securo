@@ -361,6 +361,7 @@ def serialize_account(
         "institution_name": institution_name,
         "institution_logo_url": institution_logo_url,
         "balance_date": balance_date,
+        "automatically_invested_balance": (acc.provider_metadata or {}).get("automatically_invested_balance"),
         "reserves": [{k: v for k, v in r.items() if k != "raw"}
                      for r in (acc.provider_metadata or {}).get("reserves", [])],
         "available_credit": None,

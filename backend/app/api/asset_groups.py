@@ -9,7 +9,7 @@ from app.core.workspace_context import (
     current_workspace,
     current_writable_workspace,
 )
-from app.schemas.asset_group import AssetGroupCreate, AssetGroupRead, AssetGroupUpdate
+from app.schemas.asset_group import AssetGroupCreate, AssetGroupRead, AssetGroupUpdate, ConsolidatePositions
 from app.services import asset_group_service
 
 router = APIRouter(prefix="/api/asset-groups", tags=["asset-groups"])
@@ -30,6 +30,17 @@ async def create_group(
     session: AsyncSession = Depends(get_async_session),
 ):
     return await asset_group_service.create_group(session, ctx.workspace.id, ctx.user_id, data)
+
+
+@router.post("/consolidate", response_model=AssetGroupRead, status_code=201)
+async def consolidate_positions(
+    data: ConsolidatePositions,
+    ctx: WorkspaceContext = Depends(current_writable_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await asset_group_service.consolidate_positions(
+        session, ctx.workspace.id, ctx.user_id, data
+    )
 
 
 @router.patch("/{group_id}", response_model=AssetGroupRead)

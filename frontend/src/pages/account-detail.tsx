@@ -36,6 +36,7 @@ import { useWorkspace } from '@/contexts/workspace-context'
 import { useCreateTransaction } from '@/hooks/use-create-transaction'
 import { resolveDateFnsLocale } from '@/lib/date-fns-locale'
 import { formatCurrency } from '@/lib/format'
+import { AutoInvestmentReconciliation } from '@/components/auto-investment-reconciliation'
 import { ReservedBalances } from '@/components/reserved-balances'
 import { LoanScheduleCard } from '@/components/loan-schedule-card'
 import {
@@ -1200,6 +1201,7 @@ export default function AccountDetailPage() {
         )
       })()}
 
+      {Number(account.automatically_invested_balance ?? 0) > 0 && <AutoInvestmentReconciliation account={account} display={(n, c) => mask(formatCurrency(n, c, locale))} />}
       <ReservedBalances account={account} display={(amount, currency) => mask(formatCurrency(amount, currency, locale))} />
 
       {/* Compact stat bar */}

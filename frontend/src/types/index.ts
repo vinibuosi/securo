@@ -178,6 +178,7 @@ export interface Reserve {
 
 export interface Account {
   reserves?: Reserve[]
+  automatically_invested_balance?: number | null
   id: string
   user_id: string
   connection_id: string | null

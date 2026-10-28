@@ -89,6 +89,7 @@ class AccountRead(AccountBase):
     fx_fallback: bool = False
     credit_limit: Optional[float] = None
     reserves: list[dict] = []
+    automatically_invested_balance: Optional[float] = None
     available_credit: Optional[float] = None
     statement_close_day: Optional[int] = None
     payment_due_day: Optional[int] = None

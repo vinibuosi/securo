@@ -487,6 +487,9 @@ export const connections = {
 
 // Accounts
 export const accounts = {
+  reconcileAutoInvestments: async (accountId: string, mirror_ids: string[], independent_ids: string[]): Promise<void> => {
+    await api.put(`/accounts/${accountId}/auto-investments`, { mirror_ids, independent_ids })
+  },
   reconcileReserve: async (accountId: string, reserveId: string, relationship: string): Promise<void> => {
     await api.put(`/accounts/${accountId}/reserves/${encodeURIComponent(reserveId)}/reconciliation`, { relationship })
   },
@@ -1534,6 +1537,10 @@ export const assets = {
 
 // Asset Groups ("wallets")
 export const assetGroups = {
+  consolidate: async (name: string, asset_ids: string[]): Promise<AssetGroup> => {
+    const { data } = await api.post('/asset-groups/consolidate', { name, asset_ids })
+    return data
+  },
   list: async (): Promise<AssetGroup[]> => {
     const { data } = await api.get('/asset-groups')
     return data
