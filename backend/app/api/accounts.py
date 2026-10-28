@@ -1,7 +1,9 @@
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
+
+from pydantic import BaseModel
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -312,3 +314,38 @@ async def reopen_account(
     if not account:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     return account
+
+
+
+
+class ReserveReconciliation(BaseModel):
+    relationship: Literal["pending", "included", "outside", "investment"]
+
+
+@router.put("/{account_id}/reserves/{reserve_id}/reconciliation", status_code=204)
+async def reconcile_reserve(
+    account_id: uuid.UUID,
+    reserve_id: str,
+    data: ReserveReconciliation,
+    ctx: WorkspaceContext = Depends(current_writable_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    from app.services.reserve_service import materialize
+    account = await account_service.get_account(session, account_id, ctx.workspace.id)
+    if account is None:
+        raise HTTPException(404, "Account not found")
+    metadata = dict(account.provider_metadata or {})
+    rows = [dict(r) for r in metadata.get("reserves", [])]
+    reserve = next((r for r in rows if r["id"] == reserve_id), None)
+    if reserve is None:
+        raise HTTPException(404, "Reserve not found")
+    if data.relationship == "outside" and (
+        not reserve.get("stable_identity") or reserve.get("stale")
+        or reserve.get("amount") is None or reserve.get("investment_id")
+    ):
+        raise HTTPException(422, "A fresh, identified reserve without an investment reference is required")
+    reserve["reconciliation"] = data.relationship
+    metadata["reserves"] = rows
+    account.provider_metadata = metadata
+    await materialize(session, account)
+    await session.commit()

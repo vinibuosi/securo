@@ -418,7 +418,23 @@ def _build_account_data(acc: dict, type_mapper) -> AccountData:
             credit_data, acc.get("balance"), acc.get("currencyCode") or "USD"
         )
 
+    bank = acc.get("bankData") or {}
+    from app.services.reserve_service import parse_reserves
+    provider_metadata = {
+        "reserves": parse_reserves(bank, acc.get("currencyCode") or "BRL"),
+        "has_reserved_balance": bank.get("hasReservedBalance"),
+        "available_credit_limit": str(credit_data["availableCreditLimit"])
+        if credit_data.get("availableCreditLimit") is not None else None,
+        "balance_due_date": credit_data.get("balanceDueDate"),
+        "bill_closing_date": credit_data.get("billClosingDate") or credit_data.get("balanceCloseDate"),
+    }
+    transfer = bank.get("transferNumber")
+    stable_id = hashlib.sha256(
+        f"pluggy:{transfer}:{account_type}:{acc.get('currencyCode')}".encode()
+    ).hexdigest() if transfer and account_type != "credit_card" else None
     return AccountData(
+        provider_metadata=provider_metadata,
+        stable_external_id=stable_id,
         external_id=acc["id"],
         name=acc["name"],
         type=account_type,

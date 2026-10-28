@@ -36,6 +36,7 @@ import { useWorkspace } from '@/contexts/workspace-context'
 import { useCreateTransaction } from '@/hooks/use-create-transaction'
 import { resolveDateFnsLocale } from '@/lib/date-fns-locale'
 import { formatCurrency } from '@/lib/format'
+import { ReservedBalances } from '@/components/reserved-balances'
 import { LoanScheduleCard } from '@/components/loan-schedule-card'
 import {
   AreaChart,
@@ -1198,6 +1199,8 @@ export default function AccountDetailPage() {
           </div>
         )
       })()}
+
+      <ReservedBalances account={account} display={(amount, currency) => mask(formatCurrency(amount, currency, locale))} />
 
       {/* Compact stat bar */}
       {isCreditCard ? (() => {

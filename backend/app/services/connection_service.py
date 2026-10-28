@@ -1399,6 +1399,8 @@ async def handle_oauth_callback(
         session.add(account)
         await session.flush()
 
+        from app.services.reserve_service import sync_metadata
+        await sync_metadata(session, account, acc_data.provider_metadata)
         bills_by_external_id = await _sync_credit_card_bills(
             session, user_id, account, provider, connection_data.credentials
         )
@@ -2486,6 +2488,8 @@ async def sync_connection(
             # Fetch the bills feed before transactions so transaction → bill
             # FK resolution happens in-memory (no N+1). Empty dict for non-CC
             # accounts or providers without /bills.
+            from app.services.reserve_service import sync_metadata
+            await sync_metadata(session, account, acc_data.provider_metadata)
             bills_by_external_id = await _sync_credit_card_bills(
                 session, user_id, account, provider, credentials
             )

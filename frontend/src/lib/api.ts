@@ -487,6 +487,9 @@ export const connections = {
 
 // Accounts
 export const accounts = {
+  reconcileReserve: async (accountId: string, reserveId: string, relationship: string): Promise<void> => {
+    await api.put(`/accounts/${accountId}/reserves/${encodeURIComponent(reserveId)}/reconciliation`, { relationship })
+  },
   list: async (includeClosed = false): Promise<Account[]> => {
     const { data } = await api.get('/accounts', { params: { include_closed: includeClosed } })
     return data
