@@ -39,7 +39,8 @@ async def test_reserve_reconciliation_and_idempotence(session, test_account):
     assert test_account.balance + value == Decimal("9058.79")
     await sync_metadata(session, test_account, {"reserves": None})
     assert test_account.provider_metadata["reserves"][0]["stale"]
-    assert await session.scalar(select(AssetValue.amount)) == Decimal("8720")
+    assert test_account.provider_metadata["reserves"][0]["amount"] == "8720.00"
+    assert await session.scalar(select(AssetValue.amount)) == 0
     await sync_metadata(session, test_account, {"reserves": parse_reserves(payload("0"), "BRL")})
     assert await session.scalar(select(AssetValue.amount)) == 0
 
@@ -90,3 +91,13 @@ async def test_reconciliation_api_requires_identity_and_workspace_access(client,
     assert response.status_code == 404
     response = await client.put(url, json={"relationship": "outside"})
     assert response.status_code == 401
+
+
+async def test_redemption_into_bank_balance_never_retains_second_asset_value(session, test_account):
+    await sync_metadata(session, test_account, {"reserves": parse_reserves(payload(), "BRL")})
+    test_account.provider_metadata["reserves"][0]["reconciliation"] = "outside"
+    await materialize(session, test_account)
+    test_account.balance = Decimal("9058.79")
+    await sync_metadata(session, test_account, {"reserves": None, "has_reserved_balance": False})
+    assert test_account.provider_metadata["reserves"][0]["amount"] == "0"
+    assert test_account.balance + await session.scalar(select(AssetValue.amount)) == Decimal("9058.79")

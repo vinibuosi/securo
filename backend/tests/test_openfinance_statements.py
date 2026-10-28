@@ -122,3 +122,26 @@ async def test_bill_sync_retimes_old_transactions_and_survives_failure(session, 
     cached = await _sync_credit_card_bills(session, test_user.id, test_account, provider, {})
     assert cached["oct"].id == official.id
     assert len(list((await session.scalars(select(CreditCardBill))).all())) == 1
+
+
+async def test_aggregate_purchase_does_not_inflate_reporting_and_late_bill_reverses_it(session, test_account, test_user):
+    from app.services.card_charge_reconciliation import reconcile_installment_representations
+    test_account.type = "credit_card"
+    full = Transaction(user_id=test_user.id, workspace_id=test_account.workspace_id,
+        account_id=test_account.id, external_id="full", description="Compra 12x", amount=Decimal(1200),
+        currency="BRL", type="debit", date=date(2026, 9, 10), effective_date=date(2026, 10, 5),
+        source="sync", total_installments=12, installment_number=1, installment_total_amount=Decimal(1200))
+    monthly = Transaction(user_id=test_user.id, workspace_id=test_account.workspace_id,
+        account_id=test_account.id, external_id="lot", description="Parcela 1", amount=Decimal(100),
+        currency="BRL", type="debit", date=date(2026, 9, 10), effective_date=date(2026, 10, 5),
+        source="sync", total_installments=12, installment_number=1, installment_total_amount=Decimal(1200))
+    session.add_all([full, monthly])
+    await session.flush()
+    await reconcile_installment_representations(session, test_account)
+    assert full.exclude_from_pnl
+    assert not monthly.exclude_from_pnl
+    assert sum(t.amount for t in [full, monthly] if not t.exclude_from_pnl) == 100
+    # Later official association resolves the ambiguity without deleting raw data.
+    full.bill_id = uuid.uuid4()
+    await reconcile_installment_representations(session, test_account)
+    assert not full.exclude_from_pnl

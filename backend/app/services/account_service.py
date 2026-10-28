@@ -381,7 +381,7 @@ def serialize_account(
             acc.credit_limit, Decimal(str(resolved_balance)) - held
         )
         from app.services.reserve_service import money
-        official_available = money(provider_metadata.get("available_credit_limit"))
+        official_available = money(provider_metadata.get("available_credit_limit"), allow_negative=True)
         resolved_available = official_available if official_available is not None else available
         payload["available_credit"] = float(resolved_available) if resolved_available is not None else None
         cycle = get_cycle_dates(acc.statement_close_day, acc.payment_due_day)

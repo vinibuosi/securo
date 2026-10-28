@@ -1642,6 +1642,12 @@ async def update_transaction(
         return None
 
     update_data = data.model_dump(exclude_unset=True)
+    if "exclude_from_pnl" in update_data:
+        raw = dict(transaction.raw_data or {})
+        raw.pop("_securo_provider_pnl_exclusion", None)
+        raw["_securo_manual_pnl_exclusion"] = update_data["exclude_from_pnl"]
+        transaction.raw_data = raw
+
     apply_to_transfer_pair = update_data.pop("apply_to_transfer_pair", False)
     apply_to = update_data.pop("apply_to", "this")
 

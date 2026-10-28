@@ -318,6 +318,23 @@ async def reopen_account(
 
 
 
+async def _locked_reconciliation_account(session, account_id, workspace_id):
+    """Serialize user reconciliation with the same connection lock as sync."""
+    account = await account_service.get_account(session, account_id, workspace_id)
+    if account is None:
+        return None
+    if account.connection_id:
+        from app.services.connection_service import get_connection
+        connection = await get_connection(session, account.connection_id, workspace_id, for_update=True)
+        if connection is None:
+            return None
+    from sqlalchemy import select
+    from app.models.account import Account
+    await session.execute(select(Account.id).where(Account.id == account.id).with_for_update())
+    await session.refresh(account)
+    return account
+
+
 class ReserveReconciliation(BaseModel):
     relationship: Literal["pending", "included", "outside", "investment"]
     classification: Literal["savings_pot", "generic_reserve", "blocked_balance", "judicial_block"] | None = None
@@ -332,7 +349,7 @@ async def reconcile_reserve(
     session: AsyncSession = Depends(get_async_session),
 ):
     from app.services.reserve_service import materialize
-    account = await account_service.get_account(session, account_id, ctx.workspace.id)
+    account = await _locked_reconciliation_account(session, account_id, ctx.workspace.id)
     if account is None:
         raise HTTPException(404, "Account not found")
     metadata = dict(account.provider_metadata or {})
@@ -369,7 +386,7 @@ async def reconcile_auto_investments(
 ):
     from sqlalchemy import select
     from app.models.asset import Asset
-    account = await account_service.get_account(session, account_id, ctx.workspace.id)
+    account = await _locked_reconciliation_account(session, account_id, ctx.workspace.id)
     if account is None or not account.connection_id:
         raise HTTPException(404, "Connected account not found")
     mirror = set(data.mirror_ids)

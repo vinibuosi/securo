@@ -17,12 +17,12 @@ from app.models.asset import Asset
 from app.models.asset_value import AssetValue
 
 
-def money(value):
+def money(value, *, allow_negative=False):
     if value is None or isinstance(value, bool):
         return None
     try:
         result = Decimal(str(value))
-        return result if result.is_finite() and result >= 0 else None
+        return result if result.is_finite() and (allow_negative or result >= 0) else None
     except (InvalidOperation, ValueError, TypeError):
         return None
 
@@ -100,8 +100,13 @@ def merge_metadata(previous: dict | None, incoming: dict) -> dict:
                      "classification": prior.get("classification", row["classification"]) if prior.get("classification_source") == "user" else row["classification"],
                      "updated_at": now if valid else prior.get("updated_at", now),
                      "stale": not valid})
-    # Even an empty list cannot prove redemption: require an explicit zero.
-    rows.extend({**row, "stale": True} for row in old.values())
+    # An explicit false is a provider declaration that no active reserve
+    # remains (e.g. a redemption moved the funds into the bank balance).
+    if incoming.get("has_reserved_balance") is False and not current:
+        rows.extend({**row, "amount": "0", "stale": False, "updated_at": now,
+                     "inactive": True} for row in old.values())
+    else:
+        rows.extend({**row, "stale": True} for row in old.values())
     if not rows and incoming.get("has_reserved_balance") is True:
         rows.append({"id": "unavailable", "name": "Reserva sem detalhamento",
                      "amount": None, "currency": incoming.get("currency", "BRL"),
@@ -124,7 +129,7 @@ async def materialize(session: AsyncSession, account: Account) -> None:
         mirrored = bool(reserve.get("investment_id"))
         amount = money(reserve.get("amount"))
         counted = (reserve.get("reconciliation") == "outside" and
-                   reserve.get("stable_identity") and not mirrored and amount is not None)
+                   reserve.get("stable_identity") and not reserve.get("stale") and not mirrored and amount is not None)
         if asset is None and not counted:
             continue
         if asset is None:

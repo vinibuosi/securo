@@ -74,3 +74,20 @@ async def test_auto_invested_multiple_lots_require_identity_not_equal_values(ses
         for h in known])
     assert deduction == {"bank": Decimal(600)}
     assert account.balance - deduction["bank"] + sum(h.current_value for h in known) == account.balance
+
+
+async def test_existing_unknown_overlap_is_safe_when_provider_temporarily_fails(session, test_user, test_connection):
+    from app.providers.base import AccountData
+    from app.services.connection_service import _resolve_auto_invested_deductions
+    test_connection.provider = "pluggy"
+    await _sync_holdings(session, test_user.id, test_connection, {}, [lot(1, 600)])
+    account = AccountData(external_id="bank", name="Nubank", type="checking",
+        balance=Decimal("938.79"), currency="BRL", auto_invested_balance=Decimal(600))
+    deduction = await _resolve_auto_invested_deductions(session, test_connection, None, [account])
+    assert deduction == {}
+    asset = await session.scalar(select(Asset))
+    assert asset is not None and asset.external_metadata is not None
+    assert Decimal(asset.external_metadata["_securo_reported_value"]) == 600
+    latest = await session.scalar(select(AssetValue.amount).where(AssetValue.asset_id == asset.id).order_by(AssetValue.date.desc()).limit(1))
+    assert latest == 0
+    assert account.balance + latest == Decimal("938.79")

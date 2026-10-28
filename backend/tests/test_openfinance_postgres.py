@@ -41,6 +41,7 @@ async def test_postgres_financial_identity_and_repeat_sync(postgres_sessions):
         ]}, "BRL")}
         await sync_metadata(session, account, incoming)
         assert await session.scalar(select(func.count()).select_from(Asset)) == 0
+        assert account.provider_metadata is not None
         account.provider_metadata["reserves"][0]["reconciliation"] = "outside"
         await materialize(session, account)
         await sync_metadata(session, account, incoming)

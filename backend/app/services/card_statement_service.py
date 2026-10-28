@@ -109,6 +109,7 @@ def project_statements(account, bills, transactions, today=None):
     linked = defaultdict(list)
     estimated = defaultdict(list)
     pending, future, unresolved, aggregates = [], [], [], []
+    assignment_reasons = {}
     seen_external = set()
     clean = []
     for tx in transactions:
@@ -129,12 +130,15 @@ def project_statements(account, bills, transactions, today=None):
             aggregates.append(transaction_read(tx, reason))
             continue
         if tx.status == "pending":
-            pending.append(transaction_read(tx))
             if tx.date > today and tx.total_installments:
                 future.append(transaction_read(tx))
+            else:
+                pending.append(transaction_read(tx))
             continue
         if tx.bill_id in bills_by_id:
             linked[tx.bill_id].append(tx)
+            if tx.date > today and tx.total_installments:
+                future.append(transaction_read(tx))
             continue
         if tx.date > today:
             future.append(transaction_read(tx))
@@ -161,6 +165,7 @@ def project_statements(account, bills, transactions, today=None):
                 candidates.append(bill)
         if len(candidates) == 1:
             linked[candidates[0].id].append(tx)
+            assignment_reasons[tx.id] = "estimated_cycle_assignment"
         elif len(candidates) > 1:
             unresolved.append(transaction_read(tx, "ambiguous_cycle"))
         else:
@@ -183,8 +188,8 @@ def project_statements(account, bills, transactions, today=None):
                        "total": float(bill.total_amount), "paid": float(paid) if paid is not None else None,
                        "remaining": float(remaining) if remaining is not None else None,
                        "detail_total": float(details), "discrepancy": float(bill.total_amount - details),
-                       "incomplete": paid is None or close is None or bill.total_amount != details,
-                       "transactions": [transaction_read(t) for t in rows]})
+                       "incomplete": paid is None or close is None or bill.total_amount != details or any(t.id in assignment_reasons for t in rows),
+                       "transactions": [transaction_read(t, assignment_reasons.get(t.id)) for t in rows]})
     for due, rows in estimated.items():
         total = sum((-abs(t.amount) if t.type == "credit" else abs(t.amount)
                      for t in rows if not payment(t)), Decimal(0))
@@ -193,7 +198,7 @@ def project_statements(account, bills, transactions, today=None):
                        "status": "estimated", "estimated": True, "total": float(total),
                        "paid": None, "remaining": None, "detail_total": float(total),
                        "discrepancy": None, "incomplete": True,
-                       "transactions": [transaction_read(t) for t in rows]})
+                       "transactions": [transaction_read(t, assignment_reasons.get(t.id)) for t in rows]})
     return {"total_debt": float(account.balance), "currency": account.currency,
             "cycles": sorted(cycles, key=lambda c: (c["due_date"], c["id"]), reverse=True),
             "pending": pending, "future_installments": future,

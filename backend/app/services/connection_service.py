@@ -423,7 +423,7 @@ async def _prepare_auto_invested(session, connection, holdings, accounts_data):
     Account ownership alone does not prove automatically-invested identity.
     Equality of values never participates. Reported values remain in metadata.
     """
-    if connection.provider != "pluggy" or holdings is None:
+    if connection.provider != "pluggy":
         return
     accounts = list((await session.scalars(select(Account).where(
         Account.connection_id == connection.id))).all())
@@ -435,6 +435,43 @@ async def _prepare_auto_invested(session, connection, holdings, accounts_data):
             mirrors[key] = acc.external_id
         independent.update(metadata.get("independent_investment_ids", []))
     candidates = {a.external_id for a in accounts_data if a.auto_invested_balance > 0}
+    if holdings is None:
+        # Installing this correction over old imports must also be safe when
+        # /investments is temporarily unavailable. Retain the last reported
+        # value, but do not keep counting an unresolved overlap twice.
+        stored = list((await session.scalars(select(Asset).where(
+            Asset.workspace_id == connection.workspace_id,
+            Asset.connection_id == connection.id, Asset.source == "pluggy",
+            Asset.is_archived.is_(False), Asset.sell_date.is_(None),
+        ))).all())
+        for asset in stored:
+            metadata = dict(asset.external_metadata or {})
+            if metadata.get("_securo_auto_invested") or metadata.get("_securo_independent"):
+                continue
+            owner = metadata.get("accountId")
+            if owner and owner not in candidates:
+                continue
+            latest = await session.scalar(select(AssetValue.amount).where(
+                AssetValue.asset_id == asset.id).order_by(AssetValue.date.desc()).limit(1))
+            value = metadata.get("_securo_reported_value") or str(latest if latest is not None else asset.purchase_price or 0)
+            if asset.external_id in mirrors or asset.external_id in independent:
+                if asset.external_id in mirrors:
+                    metadata["_securo_auto_invested"] = True
+                    metadata["_securo_auto_invested_account"] = mirrors[asset.external_id]
+                else:
+                    metadata["_securo_independent"] = True
+                metadata.pop("_securo_reconciliation_pending", None)
+                metadata["_securo_value_stale"] = True
+                asset.external_metadata = metadata
+                await _upsert_asset_value_for_today(session, asset, Decimal(value), app_today())
+                continue
+            metadata.update({"_securo_reported_value": value,
+                             "_securo_reconciliation_pending": True,
+                             "_securo_return_incomplete": True,
+                             "_securo_value_stale": True})
+            asset.external_metadata = metadata
+            await _upsert_asset_value_for_today(session, asset, Decimal(0), app_today())
+        return
     for holding in holdings:
         metadata = dict(holding.metadata or {})
         if metadata.pop("_securo_reconciliation_pending", False):
@@ -943,8 +980,15 @@ async def _upsert_asset_from_holding(
     asset.name = holding.name
     asset.currency = holding.currency
     asset.user_id = user_id
-    # external_metadata is a snapshot blob: we want the latest every time.
-    asset.external_metadata = holding.metadata
+    # Keep the original investment/tax context for audit while exposing the
+    # current snapshot and current reconciliation markers at the top level.
+    incoming_metadata = dict(holding.metadata or {})
+    previous_metadata = asset.external_metadata or {}
+    if previous_metadata and previous_metadata != incoming_metadata:
+        incoming_metadata["_securo_initial_metadata"] = previous_metadata.get(
+            "_securo_initial_metadata", dict(previous_metadata)
+        )
+    asset.external_metadata = incoming_metadata or None
     previous_connection_id = asset.connection_id
     asset.connection_id = connection_id
     # Only auto-unarchive when the holding moved to a different connection
@@ -1530,6 +1574,8 @@ async def handle_oauth_callback(
         # that SUM(all transactions) matches the provider-reported balance. Any
         # history that falls outside the provider's lookback window gets
         # absorbed into this synthetic transaction.
+        from app.services.card_charge_reconciliation import reconcile_installment_representations
+        await reconcile_installment_representations(session, account)
         await sync_opening_balance_for_connected_account(session, account)
 
     # Detect transfer pairs among newly synced transactions
@@ -2823,6 +2869,8 @@ async def sync_connection(
             # SUM(all txs) keeps matching account.balance from the provider.
             from app.services.card_charge_reconciliation import reconcile_charges
             await reconcile_charges(session, account)
+            from app.services.card_charge_reconciliation import reconcile_installment_representations
+            await reconcile_installment_representations(session, account)
             await sync_opening_balance_for_connected_account(session, account)
 
         # Detect transfer pairs among newly synced transactions
