@@ -1,0 +1,19 @@
+# Recovery overlay: keep revision 101 and use the EXACT previous images.
+# The old image cannot resolve Alembic revision 101, so startup deliberately
+# skips automatic migrations. Do not run its Alembic downgrade/stamp command.
+x-recovery-backend: &recovery-backend
+  image: ${SECURO_RECOVERY_BACKEND_IMAGE:?Set the locally retained previous backend image tag or digest}
+  pull_policy: never
+services:
+  backend:
+    <<: *recovery-backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+  celery-worker:
+    <<: *recovery-backend
+  celery-beat:
+    <<: *recovery-backend
+  mcp-server:
+    <<: *recovery-backend
+  frontend:
+    image: ${SECURO_RECOVERY_FRONTEND_IMAGE:?Set the locally retained previous frontend image tag or digest}
+    pull_policy: never
