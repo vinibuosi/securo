@@ -130,6 +130,9 @@ def _asset_to_read(
     if current_value is not None and asset.purchase_price is not None:
         gain_loss = current_value - float(asset.purchase_price)
 
+    if (asset.external_metadata or {}).get("_securo_return_incomplete"):
+        gain_loss = None
+
     # For ledger-backed holdings `purchase_price` caches the cost basis of the
     # held units, so it doubles as `total_invested`. `average_price != None`
     # is the signal that the holding is driven by the transactions ledger.
@@ -141,6 +144,7 @@ def _asset_to_read(
     )
 
     return AssetRead(
+        external_metadata=asset.external_metadata,
         id=asset.id,
         user_id=asset.user_id,
         name=asset.name,

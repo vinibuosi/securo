@@ -97,6 +97,7 @@ class AccountData:
     # money is counted once: as the asset when one mirrors it, as cash
     # otherwise.
     auto_invested_balance: Decimal = Decimal(0)
+    provider_metadata: Optional[dict] = None
 
 
 @dataclass

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM python:3.14-slim
 
 WORKDIR /app
@@ -15,7 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # This layer is cached until pyproject.toml or uv.lock change.
 COPY pyproject.toml uv.lock ./
 # renovate: datasource=pypi depName=uv
-RUN pip install --no-cache-dir uv==0.13.0 \
+RUN --mount=type=secret,id=proxy_ca,target=/run/secrets/proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export PIP_CERT=/run/secrets/proxy_ca SSL_CERT_FILE=/run/secrets/proxy_ca; fi \
+    && pip install --no-cache-dir uv==0.13.0 \
     && uv export --frozen --no-emit-project -o /tmp/requirements.txt \
     && pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
     && pip uninstall -y uv \
@@ -24,7 +27,9 @@ RUN pip install --no-cache-dir uv==0.13.0 \
 COPY . .
 # The project itself: deps are already satisfied above, so --no-deps keeps
 # this layer from re-resolving anything outside the lock.
-RUN pip install --no-cache-dir --no-deps -e .
+RUN --mount=type=secret,id=proxy_ca,target=/run/secrets/proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export PIP_CERT=/run/secrets/proxy_ca SSL_CERT_FILE=/run/secrets/proxy_ca; fi \
+    && pip install --no-cache-dir --no-deps -e .
 
 EXPOSE 8000
 

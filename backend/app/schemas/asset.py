@@ -73,6 +73,7 @@ class AssetUpdate(BaseModel):
 
 
 class AssetRead(BaseModel):
+    external_metadata: Optional[dict] = None
     id: uuid.UUID
     user_id: uuid.UUID
     name: str

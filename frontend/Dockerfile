@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM node:22-slim AS build
 
 WORKDIR /app
@@ -6,7 +7,9 @@ ARG VITE_APP_VERSION
 ENV VITE_APP_VERSION=$VITE_APP_VERSION
 
 COPY package.json package-lock.json .npmrc ./
-RUN npm ci
+RUN --mount=type=secret,id=proxy_ca,target=/run/secrets/proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; fi \
+    && npm ci
 
 COPY . .
 RUN npm run build
@@ -15,7 +18,7 @@ RUN npm run build
 FROM nginxinc/nginx-unprivileged:alpine
 
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY default.conf.template /etc/nginx/templates/default.conf.template
+COPY --chmod=644 default.conf.template /etc/nginx/templates/default.conf.template
 
 # Have the image derive the DNS resolver from /etc/resolv.conf, so the same
 # image proxies to the backend on Docker, Podman, Kubernetes and Railway with

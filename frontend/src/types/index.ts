@@ -163,7 +163,23 @@ export interface SyncResult extends BankConnection {
   sync_outcome: 'refreshed' | 'rate_limited'
 }
 
+export interface Reserve {
+  id: string
+  name: string
+  amount: string | null
+  currency: string
+  classification: string
+  reconciliation: string
+  updated_at: string
+  stale?: boolean
+  stable_identity: boolean
+  investment_id?: string | null
+}
+
 export interface Account {
+  provider?: string | null
+  reserves?: Reserve[]
+  automatically_invested_balance?: number | null
   id: string
   user_id: string
   connection_id: string | null
@@ -879,6 +895,7 @@ export interface BudgetSuggestionResponse {
 }
 
 export interface Asset {
+  external_metadata?: Record<string, unknown> | null
   id: string
   user_id: string
   name: string
@@ -1930,4 +1947,44 @@ export interface LoanSchedule {
   projected_payoff_date: string | null
   paid_off: boolean
   installments: LoanInstallment[]
+}
+
+
+export interface StatementTransaction {
+  id: string
+  external_id: string | null
+  description: string
+  amount: number
+  currency: string
+  date: string
+  type: string
+  status: string
+  installment_number: number | null
+  total_installments: number | null
+  reason: string | null
+}
+export interface CardStatement {
+  id: string
+  external_id: string | null
+  due_date: string
+  closing_date: string | null
+  currency: string
+  status: string
+  estimated: boolean
+  total: number
+  paid: number | null
+  remaining: number | null
+  detail_total: number
+  discrepancy: number | null
+  incomplete: boolean
+  transactions: StatementTransaction[]
+}
+export interface BillingOverview {
+  total_debt: number
+  currency: string
+  cycles: CardStatement[]
+  pending: StatementTransaction[]
+  future_installments: StatementTransaction[]
+  unresolved: StatementTransaction[]
+  aggregate_purchases: StatementTransaction[]
 }

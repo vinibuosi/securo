@@ -1,0 +1,22 @@
+# Layer over the SAME production project, environment and volumes.
+# Build backend and frontend before starting the app services.
+services:
+  backend:
+    image: securo-custom-backend:${SECURO_CUSTOM_TAG:-openfinance}
+    pull_policy: never
+    build:
+      context: ./backend
+  celery-worker:
+    image: securo-custom-backend:${SECURO_CUSTOM_TAG:-openfinance}
+    pull_policy: never
+  celery-beat:
+    image: securo-custom-backend:${SECURO_CUSTOM_TAG:-openfinance}
+    pull_policy: never
+  mcp-server:
+    image: securo-custom-backend:${SECURO_CUSTOM_TAG:-openfinance}
+    pull_policy: never
+  frontend:
+    image: securo-custom-frontend:${SECURO_CUSTOM_TAG:-openfinance}
+    pull_policy: never
+    build:
+      context: ./frontend

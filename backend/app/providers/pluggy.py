@@ -216,7 +216,8 @@ def _decimal_or_none(value) -> Optional[Decimal]:
     if value is None:
         return None
     try:
-        return Decimal(str(value))
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
     except (ValueError, TypeError, InvalidOperation):
         return None
 
@@ -270,7 +271,7 @@ def _date_or_none(value) -> Optional[date]:
 # nested `metadata` for pensions, etc.) without tying our schema to Pluggy.
 _HOLDING_PROMOTED_KEYS = {
     "id", "balance", "currencyCode", "quantity", "value",
-    "amountOriginal", "dueDate", "isin", "issueDate",
+    "amountOriginal", "dueDate", "isin",
 }
 
 # Pluggy `type` values where `issueDate` equals the user's purchase date.
@@ -293,11 +294,27 @@ def _build_holding_data(inv: dict) -> HoldingData:
     pluggy_status = (inv.get("status") or "").upper()
     pluggy_type = (inv.get("type") or "").upper()
 
-    purchase_date: Optional[date] = None
-    if pluggy_type in _ISSUE_DATE_IS_PURCHASE_DATE:
+    purchase_date: Optional[date] = _date_or_none(inv.get("purchaseDate"))
+    if purchase_date is None and pluggy_type in _ISSUE_DATE_IS_PURCHASE_DATE:
         purchase_date = _date_or_none(inv.get("issueDate"))
 
     metadata = {k: v for k, v in inv.items() if k not in _HOLDING_PROMOTED_KEYS}
+    # Only a semantically explicit savings-container id can group positions.
+    # Most Pluggy connectors do not supply this: leave them for manual grouping.
+    raw_details = inv.get("metadata")
+    details = raw_details if isinstance(raw_details, dict) else {}
+    box_id = inv.get("caixinhaId") or details.get("caixinhaId")
+    if isinstance(box_id, (str, int)) and str(box_id):
+        metadata["_securo_savings_group"] = {
+            "id": str(box_id),
+            "name": inv.get("caixinhaName") or details.get("caixinhaName") or "Caixinha",
+        }
+    metadata["_securo_return_incomplete"] = (
+        inv.get("amountOriginal") is None
+        or str(inv.get("status", "")).upper() in {"PARTIAL_WITHDRAWAL", "TOTAL_WITHDRAWAL"}
+        or any(isinstance(t, dict) and str(t.get("type", "")).upper() == "SELL"
+               for t in inv.get("transactions") or [])
+    )
 
     # A fully withdrawn position reports zero (or absent) balance and
     # quantity. When the status is TOTAL_WITHDRAWAL but the same payload
@@ -318,6 +335,7 @@ def _build_holding_data(inv: dict) -> HoldingData:
         purchase_price=_decimal_or_none(inv.get("amountOriginal")),
         purchase_date=purchase_date,
         isin=inv.get("isin") or None,
+        account_external_id=str(inv["accountId"]) if inv.get("accountId") else None,
         maturity_date=_date_or_none(inv.get("dueDate")),
         is_withdrawn=is_withdrawn,
         metadata=metadata or None,
@@ -338,7 +356,7 @@ def _build_bill_data(raw: dict) -> Optional[BillData]:
     later if/when the read path actually needs them.
     """
     bill_id = raw.get("id")
-    due_date = _date_or_none(raw.get("dueDate"))
+    due_date = _date_or_none(raw.get("dueDate") or raw.get("balanceDueDate"))
     total_amount = _decimal_or_none(raw.get("totalAmount"))
     if not bill_id or due_date is None or total_amount is None:
         return None
@@ -407,7 +425,7 @@ def _build_account_data(acc: dict, type_mapper) -> AccountData:
         raw_limit = credit_data.get("creditLimit")
         if raw_limit is not None:
             credit_limit = Decimal(str(raw_limit))
-        statement_close_day = _parse_day(credit_data.get("balanceCloseDate"))
+        statement_close_day = _parse_day(credit_data.get("billClosingDate") or credit_data.get("balanceCloseDate"))
         payment_due_day = _parse_day(credit_data.get("balanceDueDate"))
         raw_min = credit_data.get("minimumPayment")
         if raw_min is not None:
@@ -418,7 +436,24 @@ def _build_account_data(acc: dict, type_mapper) -> AccountData:
             credit_data, acc.get("balance"), acc.get("currencyCode") or "USD"
         )
 
+    bank = acc.get("bankData") or {}
+    from app.services.reserve_service import parse_reserves
+    provider_metadata = {
+        "reserves": parse_reserves(bank, acc.get("currencyCode") or "BRL"),
+        "has_reserved_balance": bank.get("hasReservedBalance"),
+        "automatically_invested_balance": str(_auto_invested_portion(acc)),
+        "available_credit_limit": str(credit_data["availableCreditLimit"])
+        if credit_data.get("availableCreditLimit") is not None else None,
+        "balance_due_date": credit_data.get("balanceDueDate"),
+        "bill_closing_date": credit_data.get("billClosingDate") or credit_data.get("balanceCloseDate"),
+    }
+    transfer = bank.get("transferNumber")
+    stable_id = hashlib.sha256(
+        f"pluggy:{transfer}:{account_type}:{acc.get('currencyCode')}".encode()
+    ).hexdigest() if transfer and account_type != "credit_card" else None
     return AccountData(
+        provider_metadata=provider_metadata,
+        stable_external_id=stable_id,
         external_id=acc["id"],
         name=acc["name"],
         type=account_type,
@@ -880,7 +915,10 @@ class PluggyProvider(BankProvider):
 
                 results = data.get("results", [])
                 for inv in results:
-                    holdings.append(_build_holding_data(inv))
+                    holding = _build_holding_data(inv)
+                    if _decimal_or_none(inv.get("balance")) is None and not holding.is_withdrawn:
+                        raise ValueError("Incomplete investment value; preserving the previous snapshot")
+                    holdings.append(holding)
 
                 total_pages = data.get("totalPages", 1)
                 if page >= total_pages or not results:

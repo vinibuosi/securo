@@ -1,3 +1,6 @@
+import { PositionProvenance } from '@/components/position-provenance'
+import { ConsolidatePositions } from '@/components/consolidate-positions'
+import { positionGroup } from '@/lib/position-group'
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
@@ -887,6 +890,7 @@ export default function AssetsPage() {
 
         {isExpanded && (
           <>
+          <PositionProvenance asset={asset} display={(n, c) => mask(formatCurrency(n, c, locale))} />
           {LOAN_COLLATERAL_TYPES.includes(asset.type) && (
             <PropertyEquitySummary
               asset={asset}
@@ -1097,6 +1101,11 @@ export default function AssetsPage() {
         </div>
         {!isCollapsed && walletAssets.length > 0 && (
           <div className="pl-4">
+            {new Set(walletAssets.map(a => a.currency)).size === 1 && (() => {
+              const totals = positionGroup(walletAssets)
+              const currency = walletAssets[0]?.currency ?? userCurrency
+              return <p className="text-xs text-muted-foreground py-2">{t('openfinance.invested', 'Valor investido')}: {totals.invested == null ? '—' : mask(formatCurrency(totals.invested, currency, locale))} · {t('openfinance.profit', 'Rendimento acumulado')}: {totals.profit == null ? t('openfinance.incompleteReturn', 'Dados insuficientes para calcular retorno') : mask(formatCurrency(totals.profit, currency, locale))}</p>
+            })()}
             {renderHoldingsTable(walletAssets)}
           </div>
         )}
@@ -1133,6 +1142,8 @@ export default function AssetsPage() {
           ) : undefined
         }
       />
+
+      {canWrite && <ConsolidatePositions positions={assetsList ?? []} display={(n, currency) => mask(formatCurrency(n, currency, locale))} />}
 
       {/* Holdings (consolidated by ticker) vs. the buy/sell ledger (#235) */}
       <div className="inline-flex items-center rounded-lg border border-border p-0.5 bg-muted/40">

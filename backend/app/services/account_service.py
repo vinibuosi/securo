@@ -324,6 +324,8 @@ def serialize_account(
         resolved_balance = float(current_balance or 0)
 
     institution_name, institution_logo_url = _institution(acc, connection)
+    raw_metadata = getattr(acc, "provider_metadata", None)
+    provider_metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
     payload = {
         "id": acc.id,
         "user_id": acc.user_id,
@@ -361,6 +363,10 @@ def serialize_account(
         "institution_name": institution_name,
         "institution_logo_url": institution_logo_url,
         "balance_date": balance_date,
+        "automatically_invested_balance": provider_metadata.get("automatically_invested_balance"),
+        "provider": getattr(connection, "provider", None),
+        "reserves": [{k: v for k, v in r.items() if k != "raw"}
+                     for r in provider_metadata.get("reserves", [])],
         "available_credit": None,
         "next_close_date": None,
         "next_due_date": None,
@@ -374,7 +380,10 @@ def serialize_account(
         available = compute_available_credit(
             acc.credit_limit, Decimal(str(resolved_balance)) - held
         )
-        payload["available_credit"] = float(available) if available is not None else None
+        from app.services.reserve_service import money
+        official_available = money(provider_metadata.get("available_credit_limit"), allow_negative=True)
+        resolved_available = official_available if official_available is not None else available
+        payload["available_credit"] = float(resolved_available) if resolved_available is not None else None
         cycle = get_cycle_dates(acc.statement_close_day, acc.payment_due_day)
         payload["next_close_date"] = cycle["next_close_date"]
         payload["next_due_date"] = cycle["next_due_date"]

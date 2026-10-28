@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AssetGroupBase(BaseModel):
@@ -39,3 +39,8 @@ class AssetGroupRead(AssetGroupBase):
     current_value_primary: float = 0.0
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ConsolidatePositions(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    asset_ids: list[uuid.UUID] = Field(min_length=1, max_length=500)

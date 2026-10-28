@@ -1,7 +1,9 @@
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
+
+from pydantic import BaseModel
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -312,3 +314,114 @@ async def reopen_account(
     if not account:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     return account
+
+
+
+
+async def _locked_reconciliation_account(session, account_id, workspace_id):
+    """Serialize user reconciliation with the same connection lock as sync."""
+    account = await account_service.get_account(session, account_id, workspace_id)
+    if account is None:
+        return None
+    if account.connection_id:
+        from app.services.connection_service import get_connection
+        connection = await get_connection(session, account.connection_id, workspace_id, for_update=True)
+        if connection is None:
+            return None
+    from sqlalchemy import select
+    from app.models.account import Account
+    await session.execute(select(Account.id).where(Account.id == account.id).with_for_update())
+    await session.refresh(account)
+    return account
+
+
+class ReserveReconciliation(BaseModel):
+    relationship: Literal["pending", "included", "outside", "investment"]
+    classification: Literal["savings_pot", "generic_reserve", "blocked_balance", "judicial_block"] | None = None
+
+
+@router.put("/{account_id}/reserves/{reserve_id}/reconciliation", status_code=204)
+async def reconcile_reserve(
+    account_id: uuid.UUID,
+    reserve_id: str,
+    data: ReserveReconciliation,
+    ctx: WorkspaceContext = Depends(current_writable_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    from app.services.reserve_service import materialize
+    account = await _locked_reconciliation_account(session, account_id, ctx.workspace.id)
+    if account is None:
+        raise HTTPException(404, "Account not found")
+    metadata = dict(account.provider_metadata or {})
+    rows = [dict(r) for r in metadata.get("reserves", [])]
+    reserve = next((r for r in rows if r["id"] == reserve_id), None)
+    if reserve is None:
+        raise HTTPException(404, "Reserve not found")
+    if data.relationship == "outside" and (
+        not reserve.get("stable_identity") or reserve.get("stale")
+        or reserve.get("amount") is None or reserve.get("investment_id")
+    ):
+        raise HTTPException(422, "A fresh, identified reserve without an investment reference is required")
+    reserve["reconciliation"] = data.relationship
+    if data.classification is not None:
+        reserve["classification"] = data.classification
+        reserve["classification_source"] = "user"
+    metadata["reserves"] = rows
+    account.provider_metadata = metadata
+    await materialize(session, account)
+    await session.commit()
+
+
+class AutoInvestmentReconciliation(BaseModel):
+    mirror_ids: list[uuid.UUID]
+    independent_ids: list[uuid.UUID]
+
+
+@router.put("/{account_id}/auto-investments", status_code=204)
+async def reconcile_auto_investments(
+    account_id: uuid.UUID,
+    data: AutoInvestmentReconciliation,
+    ctx: WorkspaceContext = Depends(current_writable_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    from sqlalchemy import select
+    from app.models.asset import Asset
+    account = await _locked_reconciliation_account(session, account_id, ctx.workspace.id)
+    if account is None or not account.connection_id:
+        raise HTTPException(404, "Connected account not found")
+    mirror = set(data.mirror_ids)
+    independent = set(data.independent_ids)
+    if mirror & independent or len(mirror | independent) > 500:
+        raise HTTPException(422, "Invalid reconciliation selection")
+    assets = list((await session.scalars(select(Asset).where(
+        Asset.workspace_id == ctx.workspace.id, Asset.connection_id == account.connection_id,
+        Asset.source == "pluggy", Asset.id.in_(mirror | independent),
+        Asset.currency == account.currency,
+    ))).all())
+    if len(assets) != len(mirror | independent):
+        raise HTTPException(404, "Position not found")
+    from app.models.account import Account
+    siblings = list((await session.scalars(select(Account).where(
+        Account.connection_id == account.connection_id, Account.id != account.id))).all())
+    ext_mirror = {a.external_id for a in assets if a.id in mirror and a.external_id}
+    for sibling in siblings:
+        prior = (sibling.provider_metadata or {}).get("auto_investment_ids", [])
+        if ext_mirror.intersection(prior):
+            raise HTTPException(422, "A position is already reconciled to another account")
+    account.provider_metadata = {**(account.provider_metadata or {}),
+        "auto_investment_ids": sorted(ext_mirror),
+        "independent_investment_ids": sorted(a.external_id for a in assets if a.id in independent and a.external_id)}
+    await session.commit()
+
+
+@router.get("/{account_id}/billing-overview")
+async def billing_overview(
+    account_id: uuid.UUID,
+    ctx: WorkspaceContext = Depends(current_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    from app.services.card_statement_service import get_overview
+    account = await account_service.get_account(session, account_id, ctx.workspace.id)
+    if account is None or account.type != "credit_card":
+        raise HTTPException(404, "Credit card not found")
+    return await get_overview(session, account)

@@ -149,7 +149,8 @@ def test_merge_sync_metadata_rekey_preserves_old_raw_fields():
     _merge_sync_metadata(tx, txn_data, replace_external_id=True)
 
     assert tx.external_id == "new-id"
-    assert tx.raw_data == {"posted": 2, "old_only": True, "new_only": True}
+    assert tx.raw_data == {"posted": 2, "old_only": True, "new_only": True,
+                           "_securo_original_payload": {"posted": 1, "old_only": True}}
 
 
 def test_description_similarity_none():
@@ -2834,6 +2835,8 @@ async def test_sync_connection_imports_holdings_by_default(
 
 _AUTO_INVEST_HOLDING = HoldingData(
     external_id="auto-inv-holding-1", name="Auto Invest Fund",
+    account_external_id="auto-inv-acc-1",
+    metadata={"isAutomaticallyInvested": True, "_securo_auto_invested": True, "_securo_auto_invested_account": "auto-inv-acc-1"},
     currency="BRL", current_value=Decimal("400"),
 )
 
@@ -3145,6 +3148,7 @@ def _holding(external_id, value, account_external_id=None):
     return HoldingData(
         external_id=external_id, name=f"Fund {external_id}", currency="BRL",
         current_value=Decimal(value), account_external_id=account_external_id,
+        metadata={"_securo_auto_invested": bool(account_external_id), "_securo_auto_invested_account": account_external_id},
     )
 
 
@@ -3215,7 +3219,7 @@ async def test_sync_unattributed_holding_does_not_deduct_from_every_account(
 
 
 @pytest.mark.asyncio
-async def test_sync_unattributed_holding_deducts_the_only_auto_investing_account(
+async def test_sync_unattributed_holding_never_deducts_without_identity(
     session: AsyncSession, test_user, test_workspace
 ):
     """Issue #843 as reported: a checking account whose idle cash goes to a
@@ -3234,7 +3238,7 @@ async def test_sync_unattributed_holding_deducts_the_only_auto_investing_account
         [_holding("fund-x", "400")],
     )
 
-    assert balances["acc-checking"] == Decimal("600")
+    assert balances["acc-checking"] == Decimal("1000")
     assert balances["acc-savings"] == Decimal("250")
     assert balances["acc-card"] == Decimal("80")
 
@@ -3317,11 +3321,11 @@ async def test_sync_does_not_deduct_for_holding_the_user_sold_or_archived(
     ("auto_invested", "holding_value", "expected"),
     [
         ("400", "25", "1000"),
-        ("400", "400", "600"),
-        ("400", "404", "600"),
-        ("400", "396", "600"),
+        ("400", "400", "1000"),
+        ("400", "404", "1000"),
+        ("400", "396", "1000"),
         ("400", "404.01", "1000"),
-        ("50", "50.90", "950"),
+        ("50", "50.90", "1000"),
         ("50", "51.01", "1000"),
     ],
     ids=[
@@ -3329,14 +3333,11 @@ async def test_sync_does_not_deduct_for_holding_the_user_sold_or_archived(
         "beyond-1pct", "within-1-unit", "beyond-1-unit",
     ],
 )
-async def test_sync_unattributed_holding_must_match_auto_invested_value(
+async def test_sync_unattributed_holding_never_uses_value_similarity(
     session: AsyncSession, test_user, test_workspace,
     auto_invested, holding_value, expected,
 ):
-    """Issue #843: a holding with no owning account only stands for the
-    auto-invested money when its value matches it (1% or 1.00, whichever is
-    larger); an unrelated investment of the same connection deducts
-    nothing."""
+    """Equal values and yield tolerances do not establish financial identity."""
     conn = await _make_connection(session, test_user.id, "Match Bank")
     accounts = [_auto_invest_account("acc-checking", "1000", auto_invested)]
 
@@ -4610,6 +4611,7 @@ async def test_sync_dedupes_advanced_installment_payment(
         description="HTM*INAA CONSULTOR 06/12",
         amount=Decimal("241.50"), date=date(2026, 4, 28),
         type="debit", currency="BRL", status="posted",
+        raw_data={"creditCardMetadata": {"purchaseId": "synthetic-purchase"}},
         installment_number=6, total_installments=12,
         installment_total_amount=Decimal("2898.00"),
         installment_purchase_date=date(2025, 11, 28),
@@ -4620,6 +4622,7 @@ async def test_sync_dedupes_advanced_installment_payment(
         description="HTM*INAA CONSULTOR 06/12",
         amount=Decimal("241.50"), date=date(2026, 5, 9),
         type="debit", currency="BRL", status="pending",
+        raw_data={"creditCardMetadata": {"purchaseId": "synthetic-purchase"}},
         installment_number=6, total_installments=12,
         installment_total_amount=Decimal("2898.00"),
         installment_purchase_date=date(2025, 11, 28),
@@ -4684,6 +4687,7 @@ async def test_sync_dedupes_advanced_installment_when_pending_lands_first(
         description="LIVRARIA SARAIVA 03/06",
         amount=Decimal("50.00"), date=date(2026, 5, 5),
         type="debit", currency="BRL", status="pending",
+        raw_data={"creditCardMetadata": {"purchaseId": "synthetic-purchase"}},
         installment_number=3, total_installments=6,
         installment_total_amount=Decimal("300.00"),
         installment_purchase_date=date(2026, 3, 5),
@@ -4694,6 +4698,7 @@ async def test_sync_dedupes_advanced_installment_when_pending_lands_first(
         description="LIVRARIA SARAIVA 03/06",
         amount=Decimal("50.00"), date=date(2026, 4, 28),
         type="debit", currency="BRL", status="posted",
+        raw_data={"creditCardMetadata": {"purchaseId": "synthetic-purchase"}},
         installment_number=3, total_installments=6,
         installment_total_amount=Decimal("300.00"),
         installment_purchase_date=date(2026, 3, 5),
